@@ -1,0 +1,36 @@
+[
+    {
+        "name": "SG V0Boom",
+        "plies": [
+            {
+                "lamina_name": "SG HF1280/PMT6",
+                "angle": 45.0
+            },
+            {
+                "lamina_name": "SG IM7/PMT6",
+                "angle": 0.0
+            },
+            {
+                "lamina_name": "SG HF1280/PMT6",
+                "angle": -45.0
+            }
+        ]
+    },
+    {
+        "name": "XN-05-IM7 3 ply",
+        "plies": [
+            {
+                "lamina_name": "XN-05-30S/PMT-7",
+                "angle": 45.0
+            },
+            {
+                "lamina_name": "SG IM7/PMT6",
+                "angle": 0.0
+            },
+            {
+                "lamina_name": "XN-05-30S/PMT-7",
+                "angle": -45.0
+            }
+        ]
+    }
+]

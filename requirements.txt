@@ -1,0 +1,15 @@
+numpy
+pandas
+matplotlib
+streamlit
+rhino3dm
+gmsh
+pytest
+sgio
+meshio
+trame>=3.5
+trame-vuetify>=2.4
+trame-vtk>=2.6
+pyvista>=0.43
+pdfplumber
+ezdxf

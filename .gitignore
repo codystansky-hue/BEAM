@@ -1,0 +1,57 @@
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Binary / geometry files
+*.3dm
+*.dxf
+*.K
+*.dat
+*.out
+*.vtk
+*.frd
+*.sta
+*.exe
+app.log
+
+# External solver executables (proprietary / licensed)
+Swiftcomp/
+CalculiX-Windows/
+gebt/
+ivabs/
+
+# Uploaded geometry
+meshes/
+
+# Solver run outputs
+runs/*
+!runs/.gitkeep
+
+# Root-level scratch / solver artifacts
+test_*.sc1
+test_*.sc1.*
+verify_test*
+beam.sc1
+beam.sc1.*
+beam.vtk
+snippet_mesh.vtk
+snippet.inp
+manual.txt
+manual_thermal.txt
+run.txt
+scraper_log_dump.txt
+extract_manual.py
+test_q4.py
+test_orth.py
+verify_swiftcomp.py
+
+# Session / ephemeral state
+db/last_session.json
+
+# PDF datasheets (proprietary manufacturer data)
+*.pdf
+
+# Development planning notes
+trameplan.md
+main_branch_changes.md
+GEMINI.md

@@ -1,0 +1,7 @@
+Resin Properties
+Property Value
+Density 1.19 g/cm3
+Tension Strength 8.23 Ksi
+Tension Modulus 0.56 Msi
+Compression Strength 21.5 Ksi
+Compression Modulus 0.66 Msi
