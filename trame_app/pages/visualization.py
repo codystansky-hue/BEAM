@@ -216,6 +216,20 @@ def build_visualization_page(server, plotter):
         ctrl.view_reset_camera = view.reset_camera
         ctrl.view_push_camera = view.push_camera
 
+    # ---- Cross-Section Preview (2D PNG fallback) ----
+    with v3.VCard(
+        v_if="mesh_preview_b64",
+        classes="mt-4",
+        variant="outlined",
+    ):
+        v3.VCardTitle("Cross-Section Preview")
+        with v3.VCardText(classes="pa-2"):
+            v3.VImg(
+                src=("'data:image/png;base64,' + mesh_preview_b64",),
+                style="background: #1e1e1e;",
+                contain=True,
+            )
+
     # ---- Full Screen Dialog ----
     with v3.VDialog(v_model=("show_full_screen", False), fullscreen=True):
         with v3.VCard(theme="dark", classes="d-flex flex-column fill-height"):

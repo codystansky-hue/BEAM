@@ -1,4 +1,4 @@
-"""Page 3: Results — Run button, results display, VTK file paths."""
+"""Page 2: Results — results display and 3D visualization."""
 
 import logging
 
@@ -32,8 +32,9 @@ def _copy_js(text_expr):
     return f"trame.trigger('_do_copy', [{text_expr}])"
 
 
-def build_results_page(server):
+def build_results_page(server, plotter):
     """Build the results page UI inside the current layout context."""
+    from trame_app.pages.visualization import build_visualization_page
     state, ctrl = server.state, server.controller
 
     # Shared "Copied!" snackbar
@@ -89,96 +90,68 @@ def build_results_page(server):
         style="display:none",
     )
 
-    # ---- Pipeline Control (Moved from Solution Setup) ----
-    with v3.VCard(classes="mb-4", variant="outlined"):
-        v3.VCardTitle("Pipeline Control")
+    # ---- Beam Mass Estimate ----
+    with v3.VCard(
+        v_if="result_beam_mass_kg !== null",
+        classes="mb-4",
+        variant="outlined",
+    ):
+        with v3.VCardTitle(classes="d-flex align-center"):
+            html.Span("Beam Mass Estimate")
+            v3.VSpacer()
+            v3.VBtn(
+                "Copy",
+                click=_copy_js(
+                    "'Mass (g)\\t' + (result_beam_mass_kg * 1000).toFixed(1) + '\\n'"
+                    "+ 'Mass (kg)\\t' + result_beam_mass_kg.toFixed(4)"
+                ),
+                **_COPY_BTN,
+            )
         with v3.VCardText():
-            # Warnings
-            v3.VAlert(
-                v_if="!geo_file_name",
-                type="warning",
-                text="Please upload a geometry file in Pre-Processing first.",
-                density="compact",
-                classes="mb-2",
-            )
-            v3.VAlert(
-                v_if="geo_file_name && layup_plies.length === 0",
-                type="warning",
-                text="Please define a layup sequence in the Layup Design tab.",
-                density="compact",
-                classes="mb-2",
-            )
+            with v3.VRow():
+                with v3.VCol(cols=4):
+                    with v3.VCard(variant="outlined", border=True):
+                        v3.VCardSubtitle("Mass")
+                        with v3.VCardText(classes="text-h6 font-weight-bold text-primary"):
+                            html.Span(
+                                v_text="result_beam_mass_kg >= 1 ? result_beam_mass_kg.toFixed(3) + ' kg' : (result_beam_mass_kg * 1000).toFixed(1) + ' g'"
+                            )
+                with v3.VCol(cols=8):
+                    v3.VAlert(
+                        text=("'Full-length beam (' + span_length + ' m span) — cross-section area × layup density integrated over all elements'",),
+                        type="info",
+                        density="compact",
+                        variant="tonal",
+                    )
 
-            # Staged Run Buttons
-            with v3.VRow(justify="center", classes="mb-2"):
+    # ---- Save to Library dialog ----
+    with v3.VDialog(v_model=("save_k_dialog_open", False), max_width=440):
+        with v3.VCard():
+            v3.VCardTitle("Save to Section Library")
+            with v3.VCardText():
+                v3.VTextField(
+                    label="Name",
+                    v_model=("save_k_name", ""),
+                    placeholder="e.g. CFRP boom — quasi-isotropic 0.74 mm",
+                    density="compact",
+                    autofocus=True,
+                )
+                v3.VAlert(
+                    text="Saves the K matrix together with geometry, layup, solver, and boundary condition context.",
+                    type="info",
+                    density="compact",
+                    variant="tonal",
+                    classes="mt-2",
+                )
+            with v3.VCardActions():
+                v3.VSpacer()
+                v3.VBtn("Cancel", variant="text", click="save_k_dialog_open = false")
                 v3.VBtn(
-                    "Run All",
-                    click=ctrl.run_all,
+                    "Save",
                     color="primary",
-                    loading=("pipeline_running",),
-                    disabled=("pipeline_running || !geo_file_name || layup_plies.length === 0",),
-                    classes="mx-2",
-                    prepend_icon="mdi-play",
-                )
-                v3.VBtn(
-                    "1 \u00b7 Mesh",
-                    click=ctrl.run_stage_1,
-                    color="secondary",
-                    variant="outlined",
-                    loading=("pipeline_running",),
-                    disabled=("pipeline_running || !geo_file_name",),
-                    classes="mx-2",
-                )
-                v3.VBtn(
-                    "2 \u00b7 Global",
-                    click=ctrl.run_stage_2,
-                    color="secondary",
-                    variant="outlined",
-                    loading=("pipeline_running",),
-                    disabled=("pipeline_running || !has_mesh",),
-                    classes="mx-2",
-                )
-                v3.VBtn(
-                    "3 \u00b7 Local",
-                    click=ctrl.run_stage_3,
-                    color="secondary",
-                    variant="outlined",
-                    loading=("pipeline_running",),
-                    disabled=("pipeline_running || !has_mesh",),
-                    classes="mx-2",
-                )
-
-            # Progress Bar
-            v3.VProgressLinear(
-                v_if="pipeline_running",
-                indeterminate=True,
-                color="primary",
-                classes="mt-2",
-            )
-            v3.VAlert(
-                v_if="pipeline_stage && pipeline_stage !== 'Complete'",
-                type="info",
-                density="compact",
-                text=("pipeline_stage",),
-                classes="mt-2",
-            )
-            
-            v3.VDivider(classes="my-4")
-            
-            # Log Output
-            client.ClientStateChange(
-                value="pipeline_log_string",
-                change="document.getElementById('pipeline-log-box') && (el => el.scrollTop = el.scrollHeight)(document.getElementById('pipeline-log-box'))",
-                style="display:none",
-            )
-            html.Div("Solver Log", classes="text-caption text-medium-emphasis mb-1")
-            with html.Div(
-                id="pipeline-log-box",
-                style="background: #1e1e1e; color: #d4d4d4; border-radius: 4px; padding: 8px; height: 144px; overflow-y: auto; font-family: monospace;",
-            ):
-                html.Pre(
-                    v_text="pipeline_log_string",
-                    style="margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 0.75rem;",
+                    variant="tonal",
+                    disabled=("!save_k_name || save_k_name.trim() === ''",),
+                    click=ctrl.save_k_to_library,
                 )
 
     # ---- K Matrix ----
@@ -206,6 +179,15 @@ def build_results_page(server):
                 density="compact",
                 classes="ml-2",
                 click=ctrl.export_ansys,
+            )
+            v3.VBtn(
+                "Save to Library",
+                prepend_icon="mdi-database-plus-outline",
+                color="primary",
+                variant="tonal",
+                density="compact",
+                classes="ml-2",
+                click="save_k_dialog_open = true",
             )
         
         with v3.VCardText():
@@ -269,14 +251,14 @@ def build_results_page(server):
     # ---- Euler Buckling ----
     with v3.VCard(v_if="result_P_cr_22 !== null", classes="mb-4", variant="outlined"):
         with v3.VCardTitle(classes="d-flex align-center"):
-            html.Span("Euler Buckling")
+            html.Span("Euler Buckling (axial compression)")
             v3.VSpacer()
             v3.VBtn(
                 "Copy",
                 click=_copy_js(
                     "'Metric\\tValue\\n'"
-                    "+ 'P_cr Lateral\\t' + result_P_cr_22.toFixed(3) + ' N\\n'"
-                    "+ 'P_cr Vertical\\t' + result_P_cr_33.toFixed(3) + ' N\\n'"
+                    "+ 'P_cr (EI22 — bends about X)\\t' + result_P_cr_22.toFixed(3) + ' N\\n'"
+                    "+ 'P_cr (EI33 — bends about Y)\\t' + result_P_cr_33.toFixed(3) + ' N\\n'"
                     "+ 'Limit Load\\t' + Math.min(result_P_cr_22, result_P_cr_33).toFixed(3) + ' N'"
                 ),
                 **_COPY_BTN,
@@ -285,12 +267,12 @@ def build_results_page(server):
             with v3.VRow():
                 with v3.VCol(cols=4):
                     with v3.VCard(variant="outlined", border=True):
-                        v3.VCardSubtitle("P_cr Lateral")
+                        v3.VCardSubtitle("P_cr (EI\u2082\u2082 — bends about section X)")
                         with v3.VCardText(classes="text-h6 font-weight-bold text-orange-darken-3"):
                             html.Span(v_text="result_P_cr_22 >= 1000 ? (result_P_cr_22 / 1000).toFixed(2) + ' kN' : result_P_cr_22.toFixed(3) + ' N'")
                 with v3.VCol(cols=4):
                     with v3.VCard(variant="outlined", border=True):
-                        v3.VCardSubtitle("P_cr Vertical")
+                        v3.VCardSubtitle("P_cr (EI\u2083\u2083 — bends about section Y)")
                         with v3.VCardText(classes="text-h6 font-weight-bold text-orange-darken-3"):
                             html.Span(v_text="result_P_cr_33 >= 1000 ? (result_P_cr_33 / 1000).toFixed(2) + ' kN' : result_P_cr_33.toFixed(3) + ' N'")
                 with v3.VCol(cols=4):
@@ -437,16 +419,6 @@ def build_results_page(server):
                     with html.Tr(v_if="buckling_vtk_path"):
                         html.Td("Buckling Mode")
                         html.Td(v_text="buckling_vtk_path", style="word-break: break-all; font-family: monospace;")
-            v3.VBtn(
-                "Open in Visualization Tab",
-                prepend_icon="mdi-eye",
-                color="primary",
-                variant="tonal",
-                density="compact",
-                classes="mt-2",
-                click="active_page = 3",
-            )
-
     # ---- Callbacks ----
     @state.change("result_k_mm")
     def _on_k_matrix_change(result_k_mm, **kwargs):
@@ -458,3 +430,11 @@ def build_results_page(server):
                     row[f"c{j}"] = f"{result_k_mm[i][j]:.3e}"
                 rows.append(row)
             state.k_matrix_rows = rows
+
+    # ---- Visualization ----
+    v3.VDivider(classes="my-4")
+    html.Div(
+        "3D Visualization",
+        classes="text-h6 font-weight-medium mb-3",
+    )
+    build_visualization_page(server, plotter)

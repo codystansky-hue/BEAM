@@ -17,7 +17,7 @@ from trame.app import get_server
 from trame.widgets import vuetify3 as v3, vtk as vtk_widgets
 from trame.ui.vuetify3 import SinglePageWithDrawerLayout
 
-from trame_app.state import initialize_state, save_db, LAST_SESSION_DB
+from trame_app.state import initialize_state, save_db, LAST_SESSION_DB, STIFFNESS_LIBRARY_DB
 from trame_app.vtk_views import (
     create_plotter,
     show_mesh_preview,
@@ -30,13 +30,15 @@ from trame_app.vtk_views import (
 from trame_app.pages.preprocessing import build_preprocessing_page
 from trame_app.pages.solution_setup import build_solution_setup_page
 from trame_app.pages.results import build_results_page
-from trame_app.pages.visualization import build_visualization_page
+from trame_app.pages.stiffness_library import build_stiffness_library_page
+from trame_app.pages.execution import build_execution_page
 from trame_app.engine import (
     run_all_stages,
     run_stage_1_async,
     run_stage_2_async,
     run_stage_3_async,
     run_material_sg_async,
+    run_batch_analysis,
     generate_snippet_preview,
     _snapshot_state,
 )
@@ -223,6 +225,131 @@ def on_run_material_sg():
     asyncio.ensure_future(run_material_sg_async(state))
 
 
+@ctrl.add("run_batch")
+def on_run_batch():
+    asyncio.ensure_future(run_batch_analysis(state))
+
+
+@ctrl.add("export_batch_pdf")
+def on_export_batch_pdf():
+    results = list(state.batch_results or [])
+    if not results:
+        return
+    try:
+        from trame_app.batch_report import generate_pdf
+        chart_b64 = state.batch_chart_b64 or ""
+        chart_bytes = base64.b64decode(chart_b64) if chart_b64 else None
+        pdf_bytes = generate_pdf(results, chart_bytes)
+        state.export_content = base64.b64encode(pdf_bytes).decode()
+        state.export_filename = "batch_analysis.pdf"
+        state.export_trigger = int(state.export_trigger or 0) + 1
+    except Exception as e:
+        log.error("PDF export failed: %s", e)
+
+
+@ctrl.add("export_batch_excel")
+def on_export_batch_excel():
+    results = list(state.batch_results or [])
+    if not results:
+        return
+    try:
+        from trame_app.batch_report import generate_excel
+        xlsx_bytes = generate_excel(results)
+        state.export_content = base64.b64encode(xlsx_bytes).decode()
+        state.export_filename = "batch_analysis.xlsx"
+        state.export_trigger = int(state.export_trigger or 0) + 1
+    except Exception as e:
+        log.error("Excel export failed: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Stiffness Library
+# ---------------------------------------------------------------------------
+@ctrl.add("save_k_to_library")
+def save_k_to_library():
+    name = (state.save_k_name or "").strip()
+    if not name or not state.result_k_mm:
+        return
+
+    from datetime import datetime
+    layup_plies = list(state.layup_plies or [])
+    laminae = state.laminae or []
+
+    total_t = sum(
+        next((x["thickness_mm"] for x in laminae if x["name"] == p.get("lamina_name")), 0.0)
+        for p in layup_plies
+    )
+    angle_parts = [str(int(p["angle"])) for p in layup_plies[:8]]
+    if len(layup_plies) > 8:
+        angle_parts.append("…")
+
+    # Concise properties for each unique lamina referenced by the layup
+    lamina_names_used = {p.get("lamina_name") for p in layup_plies if p.get("lamina_name")}
+    laminae_used = {
+        lam["name"]: {
+            "E11_GPa":       round(lam["E11"] / 1e9, 3),
+            "E22_GPa":       round(lam["E22"] / 1e9, 3),
+            "G12_GPa":       round(lam["G12"] / 1e9, 3),
+            "nu12":          round(lam["nu12"], 4),
+            "density_kg_m3": round(lam.get("density", 0)),
+            "t_mm":          round(lam["thickness_mm"], 4),
+        }
+        for lam in laminae if lam["name"] in lamina_names_used
+    }
+
+    entry = {
+        "id":        datetime.now().isoformat(),
+        "name":      name,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "geometry": {
+            "file_name":      state.geo_file_name or "",
+            "span_length_m":  float(state.span_length or 0),
+            "elem_size_mm":   float(state.elem_size or 0),
+            "num_elem_thick": int(state.num_elem_thick or 0),
+        },
+        "layup": {
+            "plies":              layup_plies,
+            "ply_count":          len(layup_plies),
+            "total_thickness_mm": round(total_t, 4),
+            "angle_summary":      "/".join(angle_parts),
+        },
+        "laminae_used": laminae_used,
+        "xs_solver":       state.xs_solver or "",
+        "bc_type":         state.bc_type or "",
+        "k_matrix_mm":     state.result_k_mm,
+        "euler_P_cr_22_N": state.result_P_cr_22,
+        "euler_P_cr_33_N": state.result_P_cr_33,
+        "beam_mass_kg":    state.result_beam_mass_kg,
+    }
+
+    library = list(state.stiffness_library or [])
+    library.append(entry)
+    state.stiffness_library = library
+    save_db(STIFFNESS_LIBRARY_DB, library)
+
+    state.save_k_dialog_open = False
+    state.save_k_name = ""
+    log.info("Saved K matrix '%s' to library (%d total)", name, len(library))
+
+
+@ctrl.add("on_lib_view")
+def on_lib_view(idx):
+    state.lib_view_idx = int(idx)
+    state.lib_view_open = True
+
+
+@ctrl.add("confirm_delete_k_entry")
+def confirm_delete_k_entry(idx):
+    library = list(state.stiffness_library or [])
+    if idx is not None and 0 <= idx < len(library):
+        removed = library.pop(idx)
+        state.stiffness_library = library
+        save_db(STIFFNESS_LIBRARY_DB, library)
+        log.info("Deleted K library entry '%s'", removed.get("name", ""))
+    state.lib_delete_confirm = False
+    state.lib_delete_idx = None
+
+
 # ---------------------------------------------------------------------------
 # Session Persistence
 # ---------------------------------------------------------------------------
@@ -256,10 +383,11 @@ def export_ansys():
 # UI Layout
 # ---------------------------------------------------------------------------
 NAV_ITEMS = [
-    {"title": "Pre-Processing", "icon": "mdi-cog-outline", "page": 0},
-    {"title": "Solution Setup", "icon": "mdi-tune", "page": 1},
-    {"title": "Results", "icon": "mdi-chart-box-outline", "page": 2},
-    {"title": "Visualization", "icon": "mdi-cube-scan", "page": 3},
+    {"title": "Pre-Processing",  "icon": "mdi-cog-outline",           "page": 0},
+    {"title": "Solution Setup",  "icon": "mdi-tune",                  "page": 1},
+    {"title": "Execution",       "icon": "mdi-play-circle-outline",   "page": 2},
+    {"title": "Results",         "icon": "mdi-chart-box-outline",     "page": 3},
+    {"title": "Section Library", "icon": "mdi-database-outline",      "page": 4},
 ]
 
 with SinglePageWithDrawerLayout(server, full_height=True) as layout:
@@ -318,15 +446,20 @@ with SinglePageWithDrawerLayout(server, full_height=True) as layout:
                 with v3.VCol(cols=12):
                     build_solution_setup_page(server)
 
-            # Page 2: Results
+            # Page 2: Execution (pipeline control + batch analysis)
             with v3.VRow(v_show="active_page === 2"):
                 with v3.VCol(cols=12):
-                    build_results_page(server)
+                    build_execution_page(server)
 
-            # Page 3: Visualization
+            # Page 3: Results + Visualization
             with v3.VRow(v_show="active_page === 3"):
                 with v3.VCol(cols=12):
-                    build_visualization_page(server, plotter)
+                    build_results_page(server, plotter)
+
+            # Page 4: Section Library
+            with v3.VRow(v_show="active_page === 4"):
+                with v3.VCol(cols=12):
+                    build_stiffness_library_page(server)
 
 
 # ---------------------------------------------------------------------------

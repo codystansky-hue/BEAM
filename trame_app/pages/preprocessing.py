@@ -544,6 +544,42 @@ def build_preprocessing_page(server):
                         persistent_hint=True,
                     )
 
+            v3.VDivider(classes="my-3")
+
+            # -- Mesh button --
+            with v3.VRow(align="center"):
+                with v3.VCol(cols="auto"):
+                    v3.VBtn(
+                        "Generate Mesh",
+                        prepend_icon="mdi-grid",
+                        click=ctrl.run_stage_1,
+                        color="primary",
+                        loading=("pipeline_running",),
+                        disabled=("pipeline_running || !geo_file_name || layup_plies.length === 0",),
+                    )
+                with v3.VCol():
+                    v3.VAlert(
+                        v_if="pipeline_stage && pipeline_stage.startsWith('Stage 1')",
+                        type="info",
+                        density="compact",
+                        text=("pipeline_stage",),
+                        hide_details=True,
+                    )
+                    v3.VAlert(
+                        v_if="has_mesh && !pipeline_running",
+                        type="success",
+                        density="compact",
+                        text="Mesh ready",
+                        hide_details=True,
+                    )
+            v3.VProgressLinear(
+                v_if="pipeline_running",
+                indeterminate=True,
+                color="primary",
+                classes="mt-2",
+            )
+
+
     # File upload handler
     @ctrl.add("on_geo_upload")
     def _handle_geo_upload():

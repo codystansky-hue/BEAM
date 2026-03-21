@@ -38,6 +38,33 @@ EULER_K_MAP = {
     "Fixed-Fixed": 0.5,
 }
 
+def _render_mesh_preview_png(vtk_path) -> str:
+    """Render the 2D cross-section mesh off-screen and return a base64 PNG string."""
+    import pyvista as pv
+    pl = pv.Plotter(off_screen=True, window_size=[600, 400])
+    pl.set_background("#1e1e1e")
+    pl.enable_parallel_projection()
+    mesh = pv.read(vtk_path)
+    pl.add_mesh(
+        mesh,
+        show_edges=True,
+        color="cyan",
+        edge_color="white",
+        line_width=1,
+        point_size=4,
+        render_points_as_spheres=True,
+        show_scalar_bar=False,
+    )
+    pl.view_xy()
+    pl.reset_camera(bounds=mesh.bounds)
+    img = pl.screenshot(None, return_img=True)
+    pl.close()
+    buf = io.BytesIO()
+    import matplotlib.pyplot as _plt
+    _plt.imsave(buf, img, format="png")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
 def generate_snippet_preview(snap):
     """Generate a 3D snippet mesh VTK preview from cached 2D mesh data.
 
@@ -203,12 +230,41 @@ def _run_stage_1(snap, log_cb=None):
         props_dict = assign_properties_to_mesh(mesh_data, layup)
         _log(f"  Materials mapped: {n_plies} plies -> {n_elems} elements")
 
+        # Beam mass estimate: integrate element area × layup density × span length
+        nodes = mesh_data["nodes"]
+        span_m = float(snap.get("span_length") or 13.0)
+        total_mass_kg = 0.0
+        for ep in props_dict["element_properties"]:
+            ni = ep["nodes"]
+            x0, y0 = nodes[ni[0], 0], nodes[ni[0], 1]
+            x1, y1 = nodes[ni[1], 0], nodes[ni[1], 1]
+            x2, y2 = nodes[ni[2], 0], nodes[ni[2], 1]
+            x3, y3 = nodes[ni[3], 0], nodes[ni[3], 1]
+            area_mm2 = 0.5 * abs(
+                (x0*y1 - x1*y0) + (x1*y2 - x2*y1) +
+                (x2*y3 - x3*y2) + (x3*y0 - x0*y3)
+            )
+            plies = ep["layup"]
+            total_t = sum(p["thickness"] for p in plies) or 1.0
+            avg_density = sum(p["material"].density * p["thickness"] for p in plies) / total_t
+            total_mass_kg += area_mm2 * avg_density * span_m * 1e-6
+        results["result_beam_mass_kg"] = total_mass_kg
+        _log(f"  Beam mass estimate: {total_mass_kg*1000:.1f} g ({total_mass_kg:.4f} kg) over {span_m} m span")
+
         # Store in internal cache
         _INTERNAL_CACHE["mesh"] = mesh_data
         _INTERNAL_CACHE["props"] = props_dict["element_properties"]
 
         results["has_mesh"] = True
         results["mesh_vtk_path"] = vtk_out_path
+
+        # Off-screen cross-section preview PNG
+        try:
+            preview_b64 = _render_mesh_preview_png(vtk_out_path)
+            results["mesh_preview_b64"] = preview_b64
+            _log("  Cross-section preview rendered.")
+        except Exception as e:
+            _log(f"  Cross-section preview skipped: {e}")
 
         # Generate snippet 3D mesh preview
         try:
@@ -264,10 +320,24 @@ def _run_stage_2(snap, log_cb=None):
             k_mm = clt.compute_stiffness(mesh_data, element_props)
             _log(f"  CLT solver finished ({time.perf_counter()-t_sc:.2f}s)")
         else:
-            # SwiftComp (or VABS — same interface)
+            # SwiftComp
             sc_exe = os.path.abspath(snap["swiftcomp_path"])
             _log(f"  SwiftComp exe: {sc_exe}")
             sc = SwiftCompSolver(executable_path=snap["swiftcomp_path"], working_dir=runs_dir)
+
+            n_layers = 1
+            tans = mesh_data.get("tangents")
+            if tans is not None and len(tans) > 1:
+                import numpy as _np
+                t0 = tans[0]
+                for _k in range(1, len(tans)):
+                    if _np.allclose(tans[_k], t0, atol=1e-6):
+                        n_layers += 1
+                    else:
+                        break
+            n_plies = len(element_props[0]["layup"]) if element_props else 0
+            _log(f"  Mesh: {len(mesh_data['elements'])} elements, "
+                 f"{n_layers} layers through thickness, {n_plies} plies in layup")
 
             _log("  Writing SwiftComp input deck...")
             sc.write_input_file(mesh_data, element_props)
@@ -387,37 +457,13 @@ def _run_stage_2(snap, log_cb=None):
                 M3_th += dF_bend * (xc - x_cen) * 1e-3   # mm → m moment arm
                 M2_th += dF_bend * (yc - y_cen) * 1e-3
 
-            # Clamp thermal loads for solver stability
-            EA_SI = k_SI[0, 0]
-            P_euler = (np.pi**2 * k_SI[5, 5] / (float(snap["span_length"])**2)) if k_SI[5, 5] > 0 else 1e9
-            max_f = min(0.001 * EA_SI, 10.0 * P_euler)
-            if abs(F_th) > max_f:
-                scale = max_f / abs(F_th)
-                _log(f"  WARNING: Thermal loads extreme ({F_th:.2e} N). Clamping to {max_f:.2f} N")
-                F_th *= scale
-                M2_th *= scale
-                M3_th *= scale
-
             _log(f"  Thermal loads: F={F_th:.2f} N, M2={M2_th:.4f} Nm, M3={M3_th:.4f} Nm")
 
         # Compressive load at tip; thermal loads as distributed (per unit length)
         span_m = float(snap["span_length"])
 
-        # Cap only the axial component against the Euler buckling load.
-        # GXBeam's geometrically-exact solver diverges if Fx exceeds P_cr.
-        # Scale the transverse component proportionally if the axial is capped.
-        p_cr_gx = min(p_cr_22, p_cr_33) if p_cr_22 > 0 and p_cr_33 > 0 else 1e9
-        axial_limit = 0.9 * p_cr_gx
-        if abs(axial_load) > axial_limit:
-            cap_scale = axial_limit / abs(axial_load)
-            axial_load_gx = -axial_limit * np.sign(axial_load)
-            trans_load_gx = trans_load * cap_scale
-            _log(f"  WARNING: |axial_load| {abs(axial_load):.1f} N > 90% P_cr ({p_cr_gx:.2f} N). "
-                 f"Capping to {axial_load_gx:.2f} N axial, {trans_load_gx:.2f} N transverse "
-                 f"(use CalculiX result for buckling)")
-        else:
-            axial_load_gx = axial_load
-            trans_load_gx = trans_load
+        axial_load_gx = axial_load
+        trans_load_gx = trans_load
 
         # GXBeam tip_load = [Fx, Fy, Fz, Mx, My, Mz]
         # Fx = along beam axis (x1).  Fz = cross-section vertical (x3 = CCX DOF2).
@@ -854,6 +900,420 @@ def _run_material_sg(snap: dict) -> dict:
         props["density"] = vf * rho_f + (1.0 - vf) * rho_m
 
     return props
+
+
+# ---------------------------------------------------------------------------
+# Batch analysis helpers
+# ---------------------------------------------------------------------------
+
+def _build_layup_from_db_entry(entry, laminae):
+    """Convert a db/layups.json entry into a Layup object.
+
+    Args:
+        entry: dict with keys 'name' and 'plies' (list of {lamina_name, angle}).
+        laminae: list of lamina dicts from db/laminae.json.
+
+    Returns:
+        Layup object, or None if no plies could be resolved.
+    """
+    mats, angs = [], []
+    for p in entry.get("plies", []):
+        lam = next((x for x in laminae if x["name"] == p.get("lamina_name")), None)
+        if not lam:
+            continue
+        cm = CompositeMaterial(
+            E11=lam["E11"], E22=lam["E22"], G12=lam["G12"], nu12=lam["nu12"],
+            density=lam["density"], ply_thickness=lam["thickness_mm"],
+            cte11=lam.get("cte11", 0.0), cte22=lam.get("cte22", 0.0),
+        )
+        mats.append(cm)
+        angs.append(p.get("angle", 0.0))
+    if not mats:
+        return None
+    return Layup(mats, angs)
+
+
+def _render_beam_vtk_offscreen(vtk_path, warp=1.0):
+    """Render a GXBeam VTK polyline off-screen and return PNG bytes.
+
+    Args:
+        vtk_path: path to the deformed beam VTK file.
+        warp: warp scale factor for displacement.
+
+    Returns:
+        PNG bytes, or None on failure.
+    """
+    if not vtk_path or not os.path.exists(vtk_path):
+        return None
+    try:
+        import pyvista as pv
+
+        pl = pv.Plotter(off_screen=True, window_size=[400, 700])
+        pl.set_background("#1e1e1e")
+        mesh = pv.read(vtk_path)
+
+        if "displacement" in mesh.point_data:
+            warped = mesh.warp_by_vector("displacement", factor=float(warp))
+            arr = mesh.point_data.get("displacement_magnitude")
+            vmin = float(arr.min()) if arr is not None else 0.0
+            vmax = float(arr.max()) if arr is not None else 1.0
+            if vmax <= vmin:
+                vmax = vmin + 1e-10
+            pl.add_mesh(
+                warped,
+                scalars="displacement_magnitude",
+                cmap="rainbow",
+                clim=(vmin, vmax),
+                show_scalar_bar=True,
+                scalar_bar_args={"title": "Disp (m)", "color": "white"},
+            )
+            pl.add_mesh(mesh, style="wireframe", color="white", opacity=0.15,
+                        show_scalar_bar=False)
+        else:
+            pl.add_mesh(mesh, color="cyan", line_width=2)
+
+        pl.view_xz()
+        pl.reset_camera()
+        img = pl.screenshot(None, return_img=True)
+        pl.close()
+
+        # Convert numpy array to PNG bytes
+        buf = io.BytesIO()
+        import matplotlib.pyplot as _plt
+        _plt.imsave(buf, img, format="png")
+        return buf.getvalue()
+    except Exception as e:
+        log.warning("Off-screen render failed: %s", e)
+        return None
+
+
+def _run_batch_analysis_sync(snap, selected_layup_names, all_layups, laminae,
+                              progress_cb=None, log_cb=None):
+    """Synchronous batch analysis: run SwiftComp + GXBeam for each selected layup.
+
+    Args:
+        snap: state snapshot dict (provides solver paths, span_length, bc_type, etc.)
+        selected_layup_names: list of layup names to process.
+        all_layups: full list of layup dicts from db/layups.json.
+        laminae: list of lamina dicts from db/laminae.json.
+        progress_cb: callable(percent: float) — called after each layup.
+        log_cb: callable(line: str) — called for each log line.
+
+    Returns:
+        List of result dicts.
+    """
+    logs_local = []
+
+    def _log(msg):
+        ts = datetime.now().strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}"
+        logs_local.append(line)
+        log.info(msg)
+        if log_cb:
+            log_cb(line)
+
+    mesh_data = _INTERNAL_CACHE["mesh"]
+    if mesh_data is None:
+        _log("FAIL: mesh not in cache — run Stage 1 first")
+        return []
+
+    entries = [e for e in all_layups if e.get("name") in selected_layup_names]
+    if not entries:
+        _log("No matching layups found in database")
+        return []
+
+    n = len(entries)
+    results = []
+    runs_base = os.path.join(os.getcwd(), "runs")
+
+    euler_K = EULER_K_MAP.get(snap.get("bc_type", "Fixed-Free (Cantilever)"), 2.0)
+    span_m = float(snap.get("span_length") or 13.0)
+    bc_key = GXBEAM_BC_MAP.get(snap.get("bc_type", "Fixed-Free (Cantilever)"), "cantilever")
+    KL_sq = (euler_K * span_m) ** 2
+
+    for i, entry in enumerate(entries):
+        name = entry.get("name", f"layup_{i}")
+        slug = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+        run_dir = os.path.join(runs_base, f"batch_{slug}")
+        os.makedirs(run_dir, exist_ok=True)
+
+        _log(f"--- [{i+1}/{n}] {name} ---")
+
+        # Build layup object
+        layup = _build_layup_from_db_entry(entry, laminae)
+        if layup is None:
+            _log(f"  SKIP: no resolvable plies for '{name}'")
+            if progress_cb:
+                progress_cb((i + 1) / n * 100)
+            continue
+
+        n_plies = len(layup.materials)
+        _log(f"  Layup: {n_plies} plies")
+
+        # Material property assignment
+        try:
+            props_dict = assign_properties_to_mesh(mesh_data, layup)
+            element_props = props_dict["element_properties"]
+        except Exception as e:
+            _log(f"  FAIL (material assign): {e}")
+            if progress_cb:
+                progress_cb((i + 1) / n * 100)
+            continue
+
+        # Beam mass estimate
+        nodes = mesh_data["nodes"]
+        total_mass_kg = 0.0
+        for ep in element_props:
+            ni = ep["nodes"]
+            x0, y0 = nodes[ni[0], 0], nodes[ni[0], 1]
+            x1, y1 = nodes[ni[1], 0], nodes[ni[1], 1]
+            x2, y2 = nodes[ni[2], 0], nodes[ni[2], 1]
+            x3, y3 = nodes[ni[3], 0], nodes[ni[3], 1]
+            area_mm2 = 0.5 * abs(
+                (x0*y1 - x1*y0) + (x1*y2 - x2*y1) +
+                (x2*y3 - x3*y2) + (x3*y0 - x0*y3)
+            )
+            plies = ep["layup"]
+            total_t = sum(p["thickness"] for p in plies) or 1.0
+            avg_density = sum(p["material"].density * p["thickness"] for p in plies) / total_t
+            total_mass_kg += area_mm2 * avg_density * span_m * 1e-6
+
+        # Cross-section solver (SwiftComp or CLT)
+        solver_choice = snap.get("xs_solver", "CLT (Built-in)")
+        try:
+            if solver_choice == "CLT (Built-in)":
+                from solvers import CLTBeamSolver
+                clt = CLTBeamSolver(working_dir=run_dir)
+                k_mm = clt.compute_stiffness(mesh_data, element_props)
+                _log(f"  CLT solver OK. K[0,0]={k_mm[0,0]:.4e}")
+            else:
+                sc = SwiftCompSolver(
+                    executable_path=snap.get("swiftcomp_path", "Swiftcomp/SwiftComp.exe"),
+                    working_dir=run_dir,
+                )
+                sc.write_input_file(mesh_data, element_props)
+                t0 = time.perf_counter()
+                sc.execute()
+                _log(f"  SwiftComp OK ({time.perf_counter()-t0:.2f}s)")
+                k_mm = sc.parse_results()
+                _log(f"  K[0,0]={k_mm[0,0]:.4e}")
+        except Exception as e:
+            import traceback
+            _log(f"  FAIL (cross-section solver): {e}")
+            _log(traceback.format_exc())
+            if progress_cb:
+                progress_cb((i + 1) / n * 100)
+            continue
+
+        # Convert K to SI
+        k_SI = k_mm.copy()
+        bending_idx = [3, 4, 5]
+        for r_idx in range(6):
+            for c_idx in range(6):
+                if r_idx in bending_idx and c_idx in bending_idx:
+                    k_SI[r_idx, c_idx] /= 1e6
+                elif r_idx in bending_idx or c_idx in bending_idx:
+                    k_SI[r_idx, c_idx] /= 1e3
+
+        # Euler buckling
+        p_cr_22 = (np.pi ** 2 * k_SI[4, 4]) / KL_sq if KL_sq > 0 else 0.0
+        p_cr_33 = (np.pi ** 2 * k_SI[5, 5]) / KL_sq if KL_sq > 0 else 0.0
+        _log(f"  EI22={k_SI[4,4]:.4f} N·m²  EI33={k_SI[5,5]:.4f} N·m²")
+        _log(f"  P_cr_22={p_cr_22:.2f} N  P_cr_33={p_cr_33:.2f} N")
+
+        # GXBeam
+        beam_vtk_path = None
+        deflections = [0.0] * 6
+        try:
+            gx_exe = snap.get("gxbeam_path", "julia")
+            gx = GXBeamSolver(
+                stiffness_matrix=k_SI,
+                span=span_m,
+                executable_path=gx_exe,
+                working_dir=run_dir,
+            )
+            gx.bc_type = bc_key
+            gx.nelem = int(snap.get("gxbeam_nelem", 20) or 20)
+            # Apply a small reference load (1 kN tip transverse) for deflection shape
+            gx.tip_load = [0.0, 0.0, -1000.0, 0.0, 0.0, 0.0]
+            gx.write_input_file()
+            t0 = time.perf_counter()
+            gx.execute()
+            _log(f"  GXBeam OK ({time.perf_counter()-t0:.2f}s)")
+            defl, _ = gx.parse_results()
+            deflections = defl.tolist()
+            gx_output = None
+            if os.path.exists(gx.output_filename):
+                with open(gx.output_filename, "r") as f:
+                    gx_output = json.load(f)
+            beam_vtk_path = os.path.join(run_dir, "deformed_beam.vtk")
+            gx.write_deformed_beam_vtk(mesh_data, defl, beam_vtk_path, gxbeam_output=gx_output)
+            _log(f"  VTK written: {beam_vtk_path}")
+        except Exception as e:
+            import traceback
+            _log(f"  WARNING (GXBeam): {e}")
+            _log(traceback.format_exc())
+
+        # Off-screen render
+        beam_img_b64 = ""
+        try:
+            img_bytes = _render_beam_vtk_offscreen(beam_vtk_path)
+            if img_bytes:
+                beam_img_b64 = base64.b64encode(img_bytes).decode()
+                _log("  Off-screen render OK")
+        except Exception as e:
+            _log(f"  WARNING (render): {e}")
+
+        results.append({
+            "name": name,
+            "layup_plies": entry.get("plies", []),
+            "k_matrix_mm": k_mm.tolist(),
+            "EA_kN": float(k_mm[0, 0] / 1e3),
+            "EI22": float(k_SI[4, 4]),
+            "EI33": float(k_SI[5, 5]),
+            "GJ": float(k_SI[3, 3]),
+            "P_cr_22_N": float(p_cr_22),
+            "P_cr_33_N": float(p_cr_33),
+            "mass_kg": float(total_mass_kg),
+            "deflections": deflections,
+            "beam_img_b64": beam_img_b64,
+            "beam_vtk_path": beam_vtk_path or "",
+        })
+
+        if progress_cb:
+            progress_cb((i + 1) / n * 100)
+
+    _log(f"Batch complete: {len(results)}/{n} successful")
+    return results
+
+
+def _make_batch_chart(batch_results) -> str:
+    """Generate a grouped-bar comparison chart. Returns base64 PNG string (no prefix)."""
+    if not batch_results:
+        return ""
+
+    names = [r["name"] for r in batch_results]
+    metrics = {
+        "EA (MN)":   [r["k_matrix_mm"][0][0] / 1e6 for r in batch_results],
+        "EI₂₂ (N·m²)": [r["EI22"] for r in batch_results],
+        "EI₃₃ (N·m²)": [r["EI33"] for r in batch_results],
+        "GJ (N·m²)": [r["GJ"] for r in batch_results],
+    }
+
+    n_metrics = len(metrics)
+    n_layups = len(names)
+    bar_w = 0.8 / n_metrics
+    x = np.arange(n_layups)
+
+    bg = "#1e1e1e"
+    axes_bg = "#2a2a2a"
+    text_c = "#cccccc"
+    grid_c = "#444444"
+    colors = ["#42a5f5", "#66bb6a", "#ef5350", "#ffca28"]
+
+    fig, axes = plt.subplots(1, n_metrics, figsize=(4 * n_metrics, 4))
+    fig.patch.set_facecolor(bg)
+    if n_metrics == 1:
+        axes = [axes]
+
+    for ax, (label, vals), color in zip(axes, metrics.items(), colors):
+        ax.set_facecolor(axes_bg)
+        ax.bar(x, vals, color=color, width=0.6)
+        ax.set_title(label, color=text_c, fontsize=9, pad=4)
+        ax.set_xticks(x)
+        ax.set_xticklabels(
+            [n[:10] + "…" if len(n) > 10 else n for n in names],
+            rotation=30, ha="right", fontsize=7, color=text_c,
+        )
+        ax.tick_params(colors=text_c, labelsize=7)
+        ax.grid(axis="y", color=grid_c, linewidth=0.5)
+        ax.spines[:].set_color(grid_c)
+
+    plt.tight_layout(pad=1.0)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=110, facecolor=bg)
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
+
+
+async def run_batch_analysis(state):
+    """Async entry point: run batch analysis and update trame state."""
+    state.batch_running = True
+    state.batch_progress = 0
+    state.batch_log_string = ""
+    state.batch_results = []
+    state.batch_table_rows = []
+    state.batch_chart_b64 = ""
+    state.flush()
+
+    snap = _snapshot_state(state)
+    selected = list(state.batch_selected_layups or [])
+    all_layups = list(state.layups or [])
+    laminae = list(state.laminae or [])
+    loop = asyncio.get_event_loop()
+
+    batch_log_lines = []
+
+    def _log_cb(line):
+        def _update():
+            batch_log_lines.append(line)
+            state.batch_log_string = "\n".join(batch_log_lines)
+            state.flush()
+        loop.call_soon_threadsafe(_update)
+
+    def _prog_cb(pct):
+        def _update():
+            state.batch_progress = int(pct)
+            state.flush()
+        loop.call_soon_threadsafe(_update)
+
+    try:
+        results = await asyncio.to_thread(
+            _run_batch_analysis_sync,
+            snap, selected, all_layups, laminae, _prog_cb, _log_cb,
+        )
+    except Exception as e:
+        import traceback
+        err_msg = f"BATCH FAILED: {e}\n{traceback.format_exc()}"
+        log.error(err_msg)
+        state.batch_log_string = (state.batch_log_string or "") + "\n" + err_msg
+        state.batch_running = False
+        state.flush()
+        return
+
+    # Format table rows
+    table_rows = []
+    for r in results:
+        k = r.get("k_matrix_mm") or [[0] * 6 for _ in range(6)]
+        p22 = r.get("P_cr_22_N") or 0
+        p33 = r.get("P_cr_33_N") or 0
+        p_cr_min = min(p22, p33) if (p22 and p33) else max(p22, p33)
+        mass_kg = r.get("mass_kg") or 0
+        table_rows.append({
+            "name": r["name"],
+            "ea":   f"{k[0][0]/1e3:.1f} kN",
+            "ei22": f"{k[4][4]/1e6:.3f}",
+            "ei33": f"{k[5][5]/1e6:.3f}",
+            "gj":   f"{k[3][3]/1e6:.3f}",
+            "pcr":  f"{p_cr_min/1000:.3f} kN" if p_cr_min >= 1000 else f"{p_cr_min:.1f} N",
+            "mass": f"{mass_kg*1000:.1f} g",
+        })
+
+    # Generate comparison chart
+    chart_b64 = ""
+    if results:
+        try:
+            chart_b64 = _make_batch_chart(results)
+        except Exception as e:
+            log.warning("Batch chart failed: %s", e)
+
+    state.batch_results = results
+    state.batch_table_rows = table_rows
+    state.batch_chart_b64 = chart_b64
+    state.batch_running = False
+    state.batch_progress = 100
+    state.flush()
 
 
 async def run_material_sg_async(state):

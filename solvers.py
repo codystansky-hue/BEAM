@@ -1185,15 +1185,41 @@ class SwiftCompSolver:
         """
         nodes    = mesh_data['nodes']
         elements = mesh_data['elements']
+        tangents = mesh_data.get('tangents')
         nodes_xy = nodes[:, :2]
         num_q4   = len(nodes_xy)
 
-        # -- Build compact material table --
+        # -- Determine elements-per-through-thickness-layer --
+        # Consecutive elements sharing the same tangent vector belong to the same
+        # circumferential strip; the repeat count = n_layers.
+        n_layers = 1
+        if tangents is not None and len(tangents) > 1:
+            t0 = tangents[0]
+            for k in range(1, len(tangents)):
+                if np.allclose(tangents[k], t0, atol=1e-6):
+                    n_layers += 1
+                else:
+                    break
+        n_plies = len(element_properties[0]['layup']) if element_properties else 1
+        log.debug("SwiftComp: n_layers=%d, n_plies=%d", n_layers, n_plies)
+
+        # -- Resolve per-element ply assignment and fiber angle --
+        # Element k sits at through-thickness layer j = k % n_layers.
+        # Map that linearly onto the ply stack.
+        elem_ply_data = []  # list of (material, theta3_deg) per element
+        for k, props in enumerate(element_properties):
+            layer_j = k % n_layers
+            ply_idx = min(int(layer_j * n_plies / n_layers), n_plies - 1)
+            ply     = props['layup'][ply_idx]
+            elem_ply_data.append((ply['material'], ply['global_angle']))
+
+        # -- Build compact material table (keyed by intrinsic properties only) --
+        # Fiber orientation is encoded in theta3 on each element line, NOT as
+        # separate material entries — this is the correct SwiftComp convention.
         mat_map  = {}
         mat_list = []
         elem_mat_ids = []
-        for props in element_properties:
-            mat = props['layup'][0]['material']
+        for mat, _angle in elem_ply_data:
             key = (mat.E11, mat.E22, mat.G12, mat.nu12, mat.density)
             if key not in mat_map:
                 mat_map[key] = len(mat_list) + 1
@@ -1260,15 +1286,17 @@ class SwiftCompSolver:
                 f.write(f'{num_q4+j+1:6d}  {mx:14.6f}  {my:14.6f}\n')
             f.write('\n')
 
-            # Q8 elements: elemID matID c1 c2 c3 c4 m12 m23 m34 m41 0
+            # Q8 elements: elemID matID c1 c2 c3 c4 m12 m23 m34 m41 theta3
+            # theta3 is the fiber orientation angle (degrees) in the SG plane.
             for i, (mid_id, conn) in enumerate(q8_elems):
                 c1, c2, c3, c4 = conn[0]+1, conn[1]+1, conn[2]+1, conn[3]+1
                 m12 = conn[4] + num_q4 + 1
                 m23 = conn[5] + num_q4 + 1
                 m34 = conn[6] + num_q4 + 1
                 m41 = conn[7] + num_q4 + 1
+                theta3 = elem_ply_data[i][1]
                 f.write(f'{i+1:6d} {mid_id} {c1:6d} {c2:6d} {c3:6d} {c4:6d}'
-                        f' {m12:6d} {m23:6d} {m34:6d} {m41:6d}  0\n')
+                        f' {m12:6d} {m23:6d} {m34:6d} {m41:6d}  {theta3:.4f}\n')
             f.write('\n')
 
             # Material section — orthotropic (orth=1), 1 temperature set
@@ -1286,16 +1314,22 @@ class SwiftCompSolver:
                 E2_mpa = mat.E22 / 1e6
                 G_mpa  = mat.G12 / 1e6
                 nu     = mat.nu12
-                # Single line format for 9 engineering constants
                 f.write(f'{i+1} 1  1\n')
                 f.write(f'0.0  {rho_t:.6e}\n')
-                f.write(f'{E1_mpa:.6e} {E2_mpa:.6e} {E2_mpa:.6e} ')
-                f.write(f'{G_mpa:.6e} {G_mpa:.6e} {G_mpa:.6e} ')
-                f.write(f'{nu:.6f} {nu:.6f} {nu:.6f}\n')
+                f.write(f'{E1_mpa:.6e} {E2_mpa:.6e} {E2_mpa:.6e}\n')  # E1 E2 E3
+                f.write(f'{G_mpa:.6e} {G_mpa:.6e} {G_mpa:.6e}\n')     # G12 G13 G23
+                f.write(f'{nu:.6f} {nu:.6f} {nu:.6f}\n')               # nu12 nu13 nu23
             f.write('\n')
             # SG volume = cross-section area in mm^2 (required for orth=1)
             f.write(f'{sg_area:.6f}\n')
 
+        sample_angles = [f"{d[1]:.1f}°" for d in elem_ply_data[:4]]
+        log.info(
+            "SwiftComp input: %d nodes, %d Q8 elems, %d materials, "
+            "n_layers=%d, n_plies=%d, first-4 theta3=%s",
+            total_nodes, total_elems, num_materials,
+            n_layers, n_plies, sample_angles,
+        )
         return self.input_filename
 
 

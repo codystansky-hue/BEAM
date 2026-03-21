@@ -329,10 +329,10 @@ def build_solution_setup_page(server):
                         v_model=("xs_solver",),
                         items=(
                             "xs_solver_options",
-                            ["CLT (Built-in)", "SwiftComp", "VABS"],
+                            ["CLT (Built-in)", "SwiftComp"],
                         ),
                         density="compact",
-                        hint="CLT uses Classical Lamination Theory + Bredt's closed-section torsion. SwiftComp/VABS require external executables.",
+                        hint="CLT uses Classical Lamination Theory + Bredt's closed-section torsion. SwiftComp requires an external executable.",
                         persistent_hint=True,
                         classes="mb-3",
                     )

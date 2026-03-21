@@ -32,7 +32,7 @@ class Layup:
 def assign_properties_to_mesh(mesh_data, layup):
     """
     Calculate global material orientation angle for each element.
-    Returns VABS element property definitions mapping elements to layup orientations.
+    Returns element property definitions mapping elements to layup orientations.
     """
     elements = mesh_data['elements']
     tangents = mesh_data['tangents']
@@ -62,7 +62,7 @@ def assign_properties_to_mesh(mesh_data, layup):
             })
             
         properties.append({
-            'element_id': i + 1,  # 1-indexed for VABS
+            'element_id': i + 1,  # 1-indexed
             'nodes': element,
             'layup': element_layup
         })
