@@ -39,6 +39,15 @@ def build_execution_page(server):
                     prepend_icon="mdi-play",
                 )
                 v3.VBtn(
+                    "1 \u00b7 Mesh",
+                    click=ctrl.run_stage_1,
+                    color="secondary",
+                    variant="outlined",
+                    loading=("pipeline_running",),
+                    disabled=("pipeline_running || !geo_file_name || layup_plies.length === 0",),
+                    classes="mx-2",
+                )
+                v3.VBtn(
                     "2 \u00b7 Global",
                     click=ctrl.run_stage_2,
                     color="secondary",

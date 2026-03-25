@@ -1253,19 +1253,6 @@ class SwiftCompSolver:
         total_nodes = num_q4 + num_mid
         total_elems = len(q8_elems)
 
-        # -- Compute SG cross-section area via shoelace (Q4 centroids) --
-        # SwiftComp requires this as the volume line for orthotropic beam SG
-        sg_area = 0.0
-        for elem in elements:
-            pts = nodes_xy[[elem[0], elem[1], elem[2], elem[3]]]
-            # shoelace for quad
-            n = len(pts)
-            for j in range(n):
-                j2 = (j + 1) % n
-                sg_area += pts[j, 0] * pts[j2, 1] - pts[j2, 0] * pts[j, 1]
-        sg_area = abs(sg_area) / 2.0
-        log.debug("SwiftComp: SG cross-section area = %.4f mm²", sg_area)
-
         with open(self.input_filename, 'w') as f:
             # Header (tab-separated to match beam2D.sc1)
             f.write('1\t!\tmodel: 0-classical, 1-shear refined\n')
@@ -1286,8 +1273,9 @@ class SwiftCompSolver:
                 f.write(f'{num_q4+j+1:6d}  {mx:14.6f}  {my:14.6f}\n')
             f.write('\n')
 
-            # Q8 elements: elemID matID c1 c2 c3 c4 m12 m23 m34 m41 theta3
-            # theta3 is the fiber orientation angle (degrees) in the SG plane.
+            # Q8 elements: elemID matID n1..n8 0 theta3
+            # The 0 terminates the connectivity list; theta3 is the fiber
+            # orientation angle (degrees) in the SG plane.
             for i, (mid_id, conn) in enumerate(q8_elems):
                 c1, c2, c3, c4 = conn[0]+1, conn[1]+1, conn[2]+1, conn[3]+1
                 m12 = conn[4] + num_q4 + 1
@@ -1296,7 +1284,7 @@ class SwiftCompSolver:
                 m41 = conn[7] + num_q4 + 1
                 theta3 = elem_ply_data[i][1]
                 f.write(f'{i+1:6d} {mid_id} {c1:6d} {c2:6d} {c3:6d} {c4:6d}'
-                        f' {m12:6d} {m23:6d} {m34:6d} {m41:6d}  {theta3:.4f}\n')
+                        f' {m12:6d} {m23:6d} {m34:6d} {m41:6d}  0  {theta3:.4f}\n')
             f.write('\n')
 
             # Material section — orthotropic (orth=1), 1 temperature set
@@ -1312,16 +1300,30 @@ class SwiftCompSolver:
                 rho_t  = mat.density / 1e9   # kg/m3 → t/mm3
                 E1_mpa = mat.E11 / 1e6        # Pa → MPa
                 E2_mpa = mat.E22 / 1e6
-                G_mpa  = mat.G12 / 1e6
-                nu     = mat.nu12
+                G12_mpa = mat.G12 / 1e6
+                nu12    = mat.nu12
+                # Transverse isotropy assumptions (2-3 plane is isotropic):
+                #   E3 = E2, nu13 = nu12, G13 = G12
+                #   nu23 estimated via Chamis-type approximation:
+                #     nu23 ≈ nu12 * E22/E11 would be ~0.02 (too low for the
+                #     isotropic plane).  Better: use 1 - (E22/E11)*nu12² scaled
+                #     to stay in the physical range.  Standard UD composites have
+                #     nu23 ≈ 0.3–0.5 (matrix dominated).  We use the closed-form
+                #     transverse isotropy bound: nu23 = 1 - nu21 - 2*nu12*nu21
+                #     clamped to [0.2, 0.5].
+                nu21  = nu12 * mat.E22 / max(mat.E11, 1e-10)
+                nu23  = min(max(1.0 - nu21 - 2.0 * nu12 * nu21, 0.2), 0.5)
+                G23_mpa = E2_mpa / max(2.0 * (1.0 + nu23), 1e-10)
                 f.write(f'{i+1} 1  1\n')
                 f.write(f'0.0  {rho_t:.6e}\n')
-                f.write(f'{E1_mpa:.6e} {E2_mpa:.6e} {E2_mpa:.6e}\n')  # E1 E2 E3
-                f.write(f'{G_mpa:.6e} {G_mpa:.6e} {G_mpa:.6e}\n')     # G12 G13 G23
-                f.write(f'{nu:.6f} {nu:.6f} {nu:.6f}\n')               # nu12 nu13 nu23
+                f.write(f'{E1_mpa:.6e} {E2_mpa:.6e} {E2_mpa:.6e}\n')    # E1 E2 E3
+                f.write(f'{G12_mpa:.6e} {G12_mpa:.6e} {G23_mpa:.6e}\n') # G12 G13 G23
+                f.write(f'{nu12:.6f} {nu12:.6f} {nu23:.6f}\n')           # nu12 nu13 nu23
             f.write('\n')
-            # SG volume = cross-section area in mm^2 (required for orth=1)
-            f.write(f'{sg_area:.6f}\n')
+            # SG volume: SwiftComp divides effective beam stiffness by this
+            # value.  For beam homogenization we want total (not per-unit-area)
+            # stiffness, so use 1.0.
+            f.write('1.0\n')
 
         sample_angles = [f"{d[1]:.1f}°" for d in elem_ply_data[:4]]
         log.info(
@@ -1343,7 +1345,10 @@ class SwiftCompSolver:
             env = os.environ.copy()
             cpu = str(os.cpu_count() or 4)
             env.update({'OMP_NUM_THREADS': cpu, 'NUMBER_OF_CPUS': cpu, 'JULIA_NUM_THREADS': cpu})
-            result = subprocess.run([self.exe, self.input_filename, "1D", "H"],
+            # Use the basename so SwiftComp writes output (.k, .opt) into
+            # the working directory rather than the process launch directory.
+            input_basename = os.path.basename(self.input_filename)
+            result = subprocess.run([self.exe, input_basename, "1D", "H"],
                            cwd=self.wd,
                            check=True,
                            stdout=subprocess.PIPE,

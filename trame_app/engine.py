@@ -329,9 +329,9 @@ def _run_stage_2(snap, log_cb=None):
             tans = mesh_data.get("tangents")
             if tans is not None and len(tans) > 1:
                 import numpy as _np
-                t0 = tans[0]
+                tan0 = tans[0]
                 for _k in range(1, len(tans)):
-                    if _np.allclose(tans[_k], t0, atol=1e-6):
+                    if _np.allclose(tans[_k], tan0, atol=1e-6):
                         n_layers += 1
                     else:
                         break

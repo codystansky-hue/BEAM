@@ -265,6 +265,55 @@ def on_export_batch_excel():
 # ---------------------------------------------------------------------------
 # Stiffness Library
 # ---------------------------------------------------------------------------
+def _k_matrix_to_rows(k_mm):
+    """Convert a 6x6 K matrix (list-of-lists) to display rows."""
+    labels = ["F1", "F2", "F3", "M1", "M2", "M3"]
+    rows = []
+    if k_mm and len(k_mm) == 6:
+        for i, label in enumerate(labels):
+            row = {"label": label}
+            for j in range(6):
+                row[f"c{j}"] = f"{k_mm[i][j]:.3e}"
+            rows.append(row)
+    return rows
+
+
+def _refresh_lib_table(library):
+    """Update the lib_table_items state from the stiffness library list."""
+    items = []
+    for i, e in enumerate(library):
+        plies = e.get("layup", {}).get("plies", [])
+        laminae_used = e.get("laminae_used", {})
+        ply_rows = []
+        for p in plies:
+            lname = p.get("lamina_name", "?")
+            lam = laminae_used.get(lname, {})
+            t_mm = lam.get("thickness_mm") or lam.get("t_mm", "")
+            # Areal weight: density (kg/m³) × thickness (mm) → g/m²
+            density = lam.get("density") or lam.get("density_kg_m3", 0)
+            faw = round(density * t_mm, 1) if t_mm and density else ""
+            ply_rows.append({
+                "lamina": lname,
+                "angle": p.get("angle", 0),
+                "t": round(t_mm, 4) if t_mm else "",
+                "faw": faw,
+            })
+        items.append({
+            "index": i,
+            "name": e.get("name", ""),
+            "ply_rows": ply_rows,
+            "k_rows": _k_matrix_to_rows(e.get("k_matrix_mm")),
+            "xs_solver": e.get("xs_solver", ""),
+            "bc_type": e.get("bc_type", ""),
+            "thickness": e.get("layup", {}).get("total_thickness_mm", ""),
+        })
+    state.lib_table_items = items
+
+
+# Initialize library table from persisted data
+_refresh_lib_table(list(state.stiffness_library or []))
+
+
 @ctrl.add("save_k_to_library")
 def save_k_to_library():
     name = (state.save_k_name or "").strip()
@@ -283,17 +332,11 @@ def save_k_to_library():
     if len(layup_plies) > 8:
         angle_parts.append("…")
 
-    # Concise properties for each unique lamina referenced by the layup
+    # Full lamina records for every material referenced by the layup, so
+    # the library entry is completely self-contained and reproducible.
     lamina_names_used = {p.get("lamina_name") for p in layup_plies if p.get("lamina_name")}
     laminae_used = {
-        lam["name"]: {
-            "E11_GPa":       round(lam["E11"] / 1e9, 3),
-            "E22_GPa":       round(lam["E22"] / 1e9, 3),
-            "G12_GPa":       round(lam["G12"] / 1e9, 3),
-            "nu12":          round(lam["nu12"], 4),
-            "density_kg_m3": round(lam.get("density", 0)),
-            "t_mm":          round(lam["thickness_mm"], 4),
-        }
+        lam["name"]: dict(lam)
         for lam in laminae if lam["name"] in lamina_names_used
     }
 
@@ -329,6 +372,7 @@ def save_k_to_library():
 
     state.save_k_dialog_open = False
     state.save_k_name = ""
+    _refresh_lib_table(library)
     log.info("Saved K matrix '%s' to library (%d total)", name, len(library))
 
 
@@ -345,19 +389,93 @@ def confirm_delete_k_entry(idx):
         removed = library.pop(idx)
         state.stiffness_library = library
         save_db(STIFFNESS_LIBRARY_DB, library)
+        _refresh_lib_table(library)
         log.info("Deleted K library entry '%s'", removed.get("name", ""))
     state.lib_delete_confirm = False
     state.lib_delete_idx = None
 
 
+@ctrl.add("copy_lib_k_tsv")
+def copy_lib_k_tsv(idx):
+    """Copy the K matrix of a library entry as TSV to clipboard."""
+    library = list(state.stiffness_library or [])
+    idx = int(idx)
+    if idx < 0 or idx >= len(library):
+        return
+    k_mm = library[idx].get("k_matrix_mm")
+    if not k_mm or len(k_mm) != 6:
+        return
+    labels = ["F1", "F2", "F3", "M1", "M2", "M3"]
+    cols = ["E1", "E2", "E3", "K1", "K2", "K3"]
+    lines = ["\t" + "\t".join(cols)]
+    for i, lbl in enumerate(labels):
+        vals = "\t".join(f"{k_mm[i][j]:.3e}" for j in range(6))
+        lines.append(f"{lbl}\t{vals}")
+    state.clipboard_text = "\n".join(lines)
+    state.clipboard_trigger = int(state.clipboard_trigger or 0) + 1
+    state.copy_snack = True
+
+
+@ctrl.add("load_k_from_library")
+def load_k_from_library(idx):
+    """Load a saved K matrix from the library into the active results,
+    allowing the user to run GXBeam / Euler / CalculiX from it."""
+    import numpy as np
+    library = list(state.stiffness_library or [])
+    idx = int(idx)
+    if idx < 0 or idx >= len(library):
+        return
+    entry = library[idx]
+    k_mm_list = entry.get("k_matrix_mm")
+    if not k_mm_list:
+        return
+
+    k_mm = np.array(k_mm_list, dtype=float)
+    state.result_k_mm = k_mm.tolist()
+
+    # Convert mm → SI (same logic as engine Stage 2)
+    k_SI = k_mm.copy()
+    bending_idx = [3, 4, 5]
+    for r in range(6):
+        for c in range(6):
+            if r in bending_idx and c in bending_idx:
+                k_SI[r, c] /= 1e6
+            elif r in bending_idx or c in bending_idx:
+                k_SI[r, c] /= 1e3
+    state.result_k_SI = k_SI.tolist()
+
+    # Populate display rows
+    from trame_app.pages.results import K_LABELS
+    rows = []
+    for i, label in enumerate(K_LABELS):
+        row = {"label": label}
+        for j in range(6):
+            row[f"c{j}"] = f"{k_mm[i, j]:.3e}"
+        rows.append(row)
+    state.k_matrix_rows = rows
+
+    # Carry over Euler / mass if stored
+    if entry.get("euler_P_cr_22_N") is not None:
+        state.result_P_cr_22 = entry["euler_P_cr_22_N"]
+    if entry.get("euler_P_cr_33_N") is not None:
+        state.result_P_cr_33 = entry["euler_P_cr_33_N"]
+    if entry.get("beam_mass_kg") is not None:
+        state.result_beam_mass_kg = entry["beam_mass_kg"]
+
+    name = entry.get("name", f"#{idx+1}")
+    log.info("Loaded K matrix '%s' from library into active results", name)
+    state.active_page = 3  # switch to Results page
+
+
 # ---------------------------------------------------------------------------
 # Session Persistence
 # ---------------------------------------------------------------------------
-@state.change("geo_file_name", "layup_plies")
+@state.change("geo_file_name", "layup_plies", "xs_solver")
 def save_session(**kwargs):
     save_db(LAST_SESSION_DB, {
         "geo_file_name": state.geo_file_name,
         "layup_plies": state.layup_plies,
+        "xs_solver": state.xs_solver,
     })
 
 @ctrl.add("export_ansys")

@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-**Run the application:**
+**Run the Trame app (active):**
+```bash
+.\.venv\Scripts\python.exe trame_app.py
+```
+
+**Run the Streamlit app (legacy):**
 ```bash
 .\.venv\Scripts\python.exe -m streamlit run app.py
 ```
@@ -26,7 +31,22 @@ pip install -r requirements.txt
 
 ## Architecture
 
-This is a **Streamlit** engineering desktop app (`app.py`) for composite beam cross-section analysis. It drives a pipeline of external solvers and a pure-Python mesher. All session state is stored in Streamlit's `st.session_state`, and material data is persisted in local JSON files in `db/`.
+This is an engineering desktop app for composite beam cross-section analysis. It has two front-ends:
+
+- **Streamlit** (`app.py`): Original UI. Run with `streamlit run app.py`.
+- **Trame/Vue3** (`trame_app.py` + `trame_app/`): New UI with integrated 3D VTK visualization. Run with `python trame_app.py`. This is the active development target.
+
+Both front-ends drive the same pipeline of external solvers and a pure-Python mesher. Material data is persisted in local JSON files in `db/`.
+
+### Trame app structure (`trame_app/`)
+
+- `engine.py`: Async execution pipeline orchestrating solver runs
+- `state.py`: State management, DB load/save, defaults
+- `vtk_views.py`: PyVista/VTK visualization helpers
+- `pages/preprocessing.py`: Material/geometry input UI
+- `pages/solution_setup.py`: Solver configuration
+- `pages/results.py`: Results display
+- `pages/visualization.py`: 3D view controls
 
 ### Analysis Pipeline (in execution order)
 
@@ -76,6 +96,8 @@ Tests live in `tests/`. They mock `rhino3dm` (an external C extension) using `un
 
 ### File notes
 
-- `app.py` is the active main entry point. The other `deploy_*.py`, `app_head.py`, `old_app_morning.py`, and `refactor_app.py` files are deprecated drafts.
+- `app.py` is the Streamlit entry point; `trame_app.py` is the Trame entry point (active development).
 - `gxbeam_solver.jl` calls `Pkg.activate(".")` so it must be invoked with `cwd` set to the project root.
 - `pdf_parser.py` uses regex on extracted PDF text to pull material properties from manufacturer datasheets.
+- `patch_db.py` and `repair_database.py` are one-off database maintenance scripts.
+- `run_mesher.py` is a standalone mesher test/debug script.

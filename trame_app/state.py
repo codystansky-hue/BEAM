@@ -12,6 +12,7 @@ RESINS_DB = os.path.join(DB_DIR, "resins.json")
 LAMINAE_DB = os.path.join(DB_DIR, "laminae.json")
 LAYUPS_DB = os.path.join(DB_DIR, "layups.json")
 LAST_SESSION_DB = os.path.join(DB_DIR, "last_session.json")
+STIFFNESS_LIBRARY_DB = os.path.join(DB_DIR, "stiffness_library.json")
 LAST_GEO_FILE = os.path.join("meshes", "last_uploaded.3dm")
 DEFAULT_CAD_PATH = r"G:\My Drive\Reflect Orbital\CAD\BoomSectionCRV.3dm"
 
@@ -41,7 +42,7 @@ DEFAULTS = {
     "elem_size": 2.0,
     "num_elem_thick": 2,
     # Cross-section solver
-    "xs_solver": "CLT (Built-in)",
+    "xs_solver": "SwiftComp",
     # Solver paths
     "swiftcomp_path": "Swiftcomp/SwiftComp.exe",
     "gxbeam_path": "julia",
@@ -64,7 +65,7 @@ DEFAULTS = {
     "nlgeom_thermal": False,
     "temp_max_x": 102.51,
     "temp_min_x": -31.85,
-    "temp_ref": 20.0,
+    "temp_ref": 177.0,
     "load_diagram_svg": "",   # computed SVG for tip-load direction diagram
     # Pipeline
     "pipeline_log": [],
@@ -78,6 +79,7 @@ DEFAULTS = {
     "result_deflections": None,  # ndarray 6 — GXBeam tip displacements
     "result_P_cr_22": None,     # float N — Euler lateral buckling load
     "result_P_cr_33": None,     # float N — Euler vertical buckling load
+    "result_beam_mass_kg": None, # float — beam mass estimate
     "result_ccx_factor": None,  # float — CalculiX eigenvalue multiplier
     "result_runs_dir": None,    # str — path to runs/ directory
     "ccx_history": [],          # list of dicts from .sta file
@@ -165,6 +167,7 @@ def initialize_state(server):
     state.resins = load_db(RESINS_DB)
     state.laminae = load_db(LAMINAE_DB)
     state.layups = load_db(LAYUPS_DB)
+    state.stiffness_library = load_db(STIFFNESS_LIBRARY_DB)
 
     # Apply defaults
     for key, value in DEFAULTS.items():
@@ -176,6 +179,8 @@ def initialize_state(server):
         if session_data:
             state.geo_file_name = session_data.get("geo_file_name")
             state.layup_plies = session_data.get("layup_plies", [])
+            if "xs_solver" in session_data:
+                state.xs_solver = session_data["xs_solver"]
             state.restore_status = f"Restored last session: {state.geo_file_name} · {len(state.layup_plies)} plies"
             log.info(state.restore_status)
     elif os.path.exists(DEFAULT_CAD_PATH):
