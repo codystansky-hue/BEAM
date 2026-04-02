@@ -163,7 +163,7 @@ def show_buckling_mode(plotter, vtk_path, warp_factor=1.0,
         plotter.add_mesh(
             warped,
             scalars=scalar_name,
-            cmap="magma",
+            cmap="turbo",
             clim=clim,
             show_edges=show_edges,
             edge_color="black",

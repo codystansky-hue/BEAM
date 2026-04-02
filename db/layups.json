@@ -32,5 +32,107 @@
                 "angle": -45.0
             }
         ]
+    },
+    {
+        "name": "IM7-85ST-UD-ST",
+        "plies": [
+            {
+                "lamina_name": "IM7-Spreadtow",
+                "angle": 45.0
+            },
+            {
+                "lamina_name": "IM7-55/PMT-7",
+                "angle": 0.0
+            },
+            {
+                "lamina_name": "IM7-Spreadtow",
+                "angle": -45.0
+            }
+        ]
+    },
+    {
+        "name": "IM7-64ST-UD-ST",
+        "plies": [
+            {
+                "lamina_name": "IM7-Spreadtow-64",
+                "angle": 45.0
+            },
+            {
+                "lamina_name": "IM7-55/PMT-7",
+                "angle": 0.0
+            },
+            {
+                "lamina_name": "IM7-Spreadtow-64",
+                "angle": -45.0
+            }
+        ]
+    },
+    {
+        "name": "XN05-IM7-30",
+        "plies": [
+            {
+                "lamina_name": "XN-05-30S/PMT-7",
+                "angle": 30.0
+            },
+            {
+                "lamina_name": "IM7-55/PMT-7",
+                "angle": 0.0
+            },
+            {
+                "lamina_name": "XN-05-30S/PMT-7",
+                "angle": -30.0
+            }
+        ]
+    },
+    {
+        "name": "XN05ST-IM7-45",
+        "plies": [
+            {
+                "lamina_name": "XN05-ST/PMT-7",
+                "angle": 45.0
+            },
+            {
+                "lamina_name": "IM7-55/PMT-7",
+                "angle": 0.0
+            },
+            {
+                "lamina_name": "XN05-ST/PMT-7",
+                "angle": -45.0
+            }
+        ]
+    },
+    {
+        "name": "XN10ST-IM7-45",
+        "plies": [
+            {
+                "lamina_name": "XN10-ST/PMT-7",
+                "angle": 45.0
+            },
+            {
+                "lamina_name": "IM7-55/PMT-7",
+                "angle": -45.0
+            },
+            {
+                "lamina_name": "XN10-ST/PMT-7",
+                "angle": -45.0
+            }
+        ]
+    },
+    {
+        "name": "XN10ST-IM7150-45",
+        "plies": [
+            {
+                "lamina_name": "XN10-ST/PMT-7",
+                "angle": 45.0
+            },
+            {
+                "lamina_name": "SG IM7/PMT6",
+                "angle": 0.0
+            },
+            {
+                "lamina_name": "XN10-ST/PMT-7",
+                "angle": -45.0
+            }
+        ]
     }
 ]

@@ -109,6 +109,7 @@ def _lamina_display_headers():
         {"title": "G12 (GPa)", "key": "G12_d"},
         {"title": "nu12", "key": "nu12"},
         {"title": "Thickness (mm)", "key": "thickness_mm"},
+        {"title": "GSM (g/m²)", "key": "gsm"},
         {"title": "Density (kg/m3)", "key": "density"},
         {"title": "α11 (µm/m/K)", "key": "cte11_d"},
         {"title": "α22 (µm/m/K)", "key": "cte22_d"},
@@ -124,6 +125,7 @@ def _lamina_display_rows(laminae):
                 row[f"{k}_d"] = round(lm[k] / 1e9, 3)
         row["nu12"] = lm.get("nu12", 0)
         row["thickness_mm"] = lm.get("thickness_mm", 0)
+        row["gsm"] = round(lm.get("density", 0) * lm.get("thickness_mm", 0), 1)
         row["density"] = lm.get("density", 0)
         row["cte11_d"] = round(lm.get("cte11", 0) * 1e6, 3)
         row["cte22_d"] = round(lm.get("cte22", 0) * 1e6, 3)
@@ -277,6 +279,21 @@ def _build_fiber_edit_dialog(server):
             state.fiber_tsv = _fiber_tsv(state.fibers)
             log.info("Deleted fiber: %s", name)
 
+    @ctrl.add("copy_fiber_by_idx")
+    def _copy_fiber_by_idx(idx):
+        fibers = list(state.fibers)
+        if 0 <= idx < len(fibers):
+            copy = dict(fibers[idx])
+            copy["name"] = f"{copy.get('name', 'Unnamed')} (Copy)"
+            fibers.append(copy)
+            state.fibers = fibers
+            save_db(FIBERS_DB, state.fibers)
+            state.fiber_rows = _fiber_display_rows(state.fibers)
+            state.fiber_tsv = _fiber_tsv(state.fibers)
+            state.save_snackbar_text = f"Copied fiber: {copy['name']}"
+            state.save_snackbar_open = True
+            log.info("Copied fiber: %s", copy["name"])
+
 
 def _build_resin_edit_dialog(server):
     state, ctrl = server.state, server.controller
@@ -355,6 +372,21 @@ def _build_resin_edit_dialog(server):
             state.resin_rows = _resin_display_rows(state.resins)
             state.resin_tsv = _resin_tsv(state.resins)
             log.info("Deleted resin: %s", name)
+
+    @ctrl.add("copy_resin_by_idx")
+    def _copy_resin_by_idx(idx):
+        resins = list(state.resins)
+        if 0 <= idx < len(resins):
+            copy = dict(resins[idx])
+            copy["name"] = f"{copy.get('name', 'Unnamed')} (Copy)"
+            resins.append(copy)
+            state.resins = resins
+            save_db(RESINS_DB, state.resins)
+            state.resin_rows = _resin_display_rows(state.resins)
+            state.resin_tsv = _resin_tsv(state.resins)
+            state.save_snackbar_text = f"Copied resin: {copy['name']}"
+            state.save_snackbar_open = True
+            log.info("Copied resin: %s", copy["name"])
 
 
 def _build_lamina_edit_dialog(server):
@@ -691,6 +723,12 @@ def _build_constituents_tab(server):
                     )
                 with v3.VCol(cols="auto"):
                     v3.VBtn(
+                        icon="mdi-content-copy", size="small", variant="tonal",
+                        disabled=("sel_fiber_idx === null || sel_fiber_idx === undefined",),
+                        click=(ctrl.copy_fiber_by_idx, "[sel_fiber_idx]"),
+                    )
+                with v3.VCol(cols="auto"):
+                    v3.VBtn(
                         icon="mdi-delete", size="small", variant="tonal", color="error",
                         disabled=("sel_fiber_idx === null || sel_fiber_idx === undefined",),
                         click=(ctrl.delete_fiber_by_idx, "[sel_fiber_idx]"),
@@ -786,6 +824,12 @@ def _build_constituents_tab(server):
                         icon="mdi-pencil", size="small", variant="tonal",
                         disabled=("sel_resin_idx === null || sel_resin_idx === undefined",),
                         click=(ctrl.open_edit_resin, "[sel_resin_idx]"),
+                    )
+                with v3.VCol(cols="auto"):
+                    v3.VBtn(
+                        icon="mdi-content-copy", size="small", variant="tonal",
+                        disabled=("sel_resin_idx === null || sel_resin_idx === undefined",),
+                        click=(ctrl.copy_resin_by_idx, "[sel_resin_idx]"),
                     )
                 with v3.VCol(cols="auto"):
                     v3.VBtn(

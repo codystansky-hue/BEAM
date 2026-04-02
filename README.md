@@ -41,18 +41,33 @@ py -3.12 -m venv .venv
 
 ### Julia (required for global beam analysis)
 
-1. Download and install Julia from [julialang.org](https://julialang.org/downloads/) — any 1.x release.
-2. Ensure `julia` is available on your `PATH` (open a new terminal and run `julia --version` to verify).
+1. Download and install Julia from **[julialang.org/downloads](https://julialang.org/downloads/)** — any 1.x release works.
+2. Use the Windows installer and let it add `julia` to your `PATH`. Verify with `julia --version` in a new terminal.
 3. Julia packages (`GXBeam`, `JSON`) are managed via `Project.toml` / `Manifest.toml` in the project root. On first run the solver script auto-installs them — **this requires internet access the first time**.
 
 ### CalculiX (required for local buckling analysis)
 
-CalculiX is **not bundled** in this repository. Download the Windows multi-threaded binary:
+CalculiX is **not bundled** in this repository and can be hard to track down. You need the **Windows multi-threaded** (`ccx_MT.exe`) build.
 
-- **CalculiX 2.23 MT for Windows**: available from the [CalculiX for Windows](http://www.dhondt.de/) project or pre-built binaries on GitHub.
-- Expected binary: `ccx_MT.exe`
+**Where to get it:**
 
-After downloading, place the binary at the path configured in the app's solver settings (see [Configuring Solver Paths](#configuring-solver-paths)).
+1. **Official site** — [www.calculix.de](http://www.calculix.de/) — links to community-maintained Windows packages under the *CalculiX on Windows* section.
+2. **Pre-built GitHub releases** — search GitHub for `CalculiX Windows ccx_MT`. Community-maintained releases (e.g. from the `calculix` org) provide a ZIP with `ccx_MT.exe` and the required runtime DLLs alongside it. The version used during development was **2.23.0**.
+3. The binary requires the Intel OpenMP runtime (`libiomp5md.dll`). If the solver crashes immediately, install the [Intel oneAPI redistributable](https://www.intel.com/content/www/us/en/developer/tools/oneapi/toolkits.html) or copy the DLL from the same ZIP.
+
+**Recommended install layout** (matches the app's default path):
+
+```
+BEAM-paraview\
+  CalculiX-Windows\
+    bin\
+      CalculiX-2.23.0-win-x64\
+        bin\
+          ccx_MT.exe
+          libiomp5md.dll     ← keep DLLs alongside the exe
+```
+
+After downloading, set the CalculiX path in the app's **Solver Paths** drawer (see [Configuring Solver Paths](#configuring-solver-paths)).
 
 ### SwiftComp (optional)
 
@@ -300,18 +315,7 @@ Solver paths are configured in the **Solver Paths** panel at the bottom of the n
 |--------|-------------|-------|
 | SwiftComp | `Swiftcomp/SwiftComp.exe` | Optional — only needed if using SwiftComp solver. |
 | Julia (GXBeam) | `julia` | Must be on system `PATH`. Verify with `julia --version` in a terminal. |
-| CalculiX | *(set to your install path)* | Full path to `ccx_MT.exe`. Example: `C:\CalculiX\bin\ccx_MT.exe` |
-
-A recommended folder layout if you place CalculiX inside the project:
-
-```
-BEAM-paraview\
-  CalculiX-Windows\
-    bin\
-      CalculiX-2.23.0-win-x64\
-        bin\
-          ccx_MT.exe
-```
+| CalculiX | *(set to your install path)* | Full path to `ccx_MT.exe`. See [Prerequisites → CalculiX](#calculix-required-for-local-buckling-analysis) for download instructions. |
 
 ---
 

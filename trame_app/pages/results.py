@@ -162,6 +162,14 @@ def build_results_page(server, plotter):
     ):
         with v3.VCardTitle(classes="d-flex align-center"):
             html.Span("6x6 Cross-Section Stiffness Matrix (K) [N/mm]")
+            v3.VChip(
+                v_if="result_k_source_label",
+                v_text="result_k_source_label",
+                size="small",
+                variant="tonal",
+                color=("result_k_source_label && result_k_source_label.startsWith('Library') ? 'secondary' : 'primary'",),
+                classes="ml-3",
+            )
             v3.VSpacer()
             v3.VBtn(
                 "Copy TSV",
@@ -187,7 +195,7 @@ def build_results_page(server, plotter):
                 variant="tonal",
                 density="compact",
                 classes="ml-2",
-                click="save_k_dialog_open = true",
+                click=ctrl.open_save_k_dialog,
             )
         
         with v3.VCardText():
@@ -281,17 +289,22 @@ def build_results_page(server, plotter):
                         with v3.VCardText(classes="text-h6 font-weight-bold text-error"):
                             html.Span(v_text="Math.min(result_P_cr_22, result_P_cr_33) >= 1000 ? (Math.min(result_P_cr_22, result_P_cr_33) / 1000).toFixed(2) + ' kN' : Math.min(result_P_cr_22, result_P_cr_33).toFixed(3) + ' N'")
 
-    # ---- CalculiX Convergence Monitor ----
+    # ---- CalculiX Progress ----
     with v3.VCard(
-        v_if="ccx_convergence_img || (pipeline_running && pipeline_stage.includes('Stage 3'))",
+        v_if="(pipeline_running && pipeline_stage.includes('Stage 3')) || result_ccx_factor !== null",
         classes="mb-4",
         variant="outlined",
     ):
         with v3.VCardTitle(classes="d-flex align-center"):
-            html.Span("CalculiX Convergence Monitor")
+            html.Span("CalculiX")
             v3.VSpacer()
+            html.Span(
+                v_if="ccx_history.length > 0",
+                v_text="ccx_history.length + ' increments'",
+                classes="text-caption text-medium-emphasis mr-2",
+            )
             v3.VBtn(
-                "Copy Increments",
+                "Copy",
                 v_if="ccx_history.length > 0 && !pipeline_running",
                 click=_copy_js(
                     "['Step','Inc','Att','Iter','dt','Total'].join('\\t') + '\\n' + "
@@ -299,25 +312,40 @@ def build_results_page(server, plotter):
                 ),
                 **_COPY_BTN,
             )
-        with v3.VCardText():
-            # Live plot image — updates every ~0.5 s while solving
-            html.Img(
-                v_if="ccx_convergence_img",
-                src=("ccx_convergence_img",),
-                style="width:100%; border-radius:4px;",
+        with v3.VCardText(classes="pt-1"):
+            # Running: indeterminate until .sta data arrives, then determinate
+            v3.VProgressLinear(
+                v_if="pipeline_running && pipeline_stage.includes('Stage 3') && ccx_history.length === 0",
+                indeterminate=True,
+                color="primary",
+                bg_color="grey-darken-3",
+                height=16,
+                rounded=True,
+                classes="mb-2",
             )
-            # Spinner shown before first .sta data arrives
-            with v3.VRow(
-                v_if="!ccx_convergence_img && pipeline_running",
-                justify="center",
-                classes="py-4",
-            ):
-                v3.VProgressCircular(indeterminate=True, color="primary")
-                html.Span("Waiting for CalculiX...", classes="ml-3 text-grey")
-            # Collapsible increment table (shown only after solve finishes)
+            v3.VProgressLinear(
+                v_if="pipeline_running && pipeline_stage.includes('Stage 3') && ccx_history.length > 0",
+                model_value=("ccx_history[ccx_history.length-1].total * 100",),
+                color="primary",
+                bg_color="grey-darken-3",
+                height=16,
+                rounded=True,
+                classes="mb-2",
+            )
+            # Completed: green full bar
+            v3.VProgressLinear(
+                v_if="!pipeline_running && result_ccx_factor !== null",
+                model_value=100,
+                color="success",
+                bg_color="grey-darken-3",
+                height=16,
+                rounded=True,
+                classes="mb-2",
+            )
+            # Increment table — only shown when .sta data was captured (NLGEOM thermal runs)
             with v3.VExpansionPanels(
                 v_if="ccx_history.length > 0 && !pipeline_running",
-                classes="mt-2",
+                classes="mt-1",
             ):
                 with v3.VExpansionPanel(title="Increment Details"):
                     with v3.VExpansionPanelText():

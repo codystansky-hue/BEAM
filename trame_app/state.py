@@ -82,8 +82,8 @@ DEFAULTS = {
     "result_beam_mass_kg": None, # float — beam mass estimate
     "result_ccx_factor": None,  # float — CalculiX eigenvalue multiplier
     "result_runs_dir": None,    # str — path to runs/ directory
+    "result_k_source_label": "",  # str — "Library: <name>" or "Solved (<solver>): <angles>"
     "ccx_history": [],          # list of dicts from .sta file
-    "ccx_convergence_img": "",  # base64 PNG updated live during Stage 3
     # ---- Constituent / lamina edit dialogs ----
     "edit_fiber_open": False, "edit_fiber_idx": -1,
     "edit_fiber_name": "", "edit_fiber_e11_t": 0.0, "edit_fiber_e11_c": 0.0,

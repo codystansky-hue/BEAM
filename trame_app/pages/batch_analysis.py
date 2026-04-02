@@ -24,7 +24,7 @@ def build_batch_analysis_page(server):
         # Layup selection
         v3.VSelect(
             v_model=("batch_selected_layups", []),
-            items=("layup_names", []),
+            items=("(layups || []).map(l => l.name)",),
             label="Select layups to compare",
             multiple=True,
             chips=True,
@@ -73,7 +73,8 @@ def build_batch_analysis_page(server):
             v_if="batch_log_string",
             style=(
                 "background: #1e1e1e; color: #d4d4d4; border-radius: 4px; "
-                "padding: 8px; max-height: 120px; overflow-y: auto; font-family: monospace;"
+                "padding: 8px; max-height: 120px; overflow-y: auto; font-family: monospace; "
+                "display: flex; flex-direction: column-reverse;"
             ),
             classes="mb-2",
         ):

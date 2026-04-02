@@ -37,6 +37,7 @@ from trame_app.engine import (
     run_stage_1_async,
     run_stage_2_async,
     run_stage_3_async,
+    run_stiffness_async,
     run_material_sg_async,
     run_batch_analysis,
     generate_snippet_preview,
@@ -220,6 +221,76 @@ def on_run_stage_2():
 def on_run_stage_3():
     asyncio.ensure_future(run_stage_3_async(state))
 
+@ctrl.add("run_stiffness")
+def on_run_stiffness():
+    asyncio.ensure_future(_run_stiffness_and_save())
+
+async def _run_stiffness_and_save():
+    await run_stiffness_async(state)
+    # Auto-save to library if successful
+    if not state.result_k_mm:
+        return
+
+    from datetime import datetime as _dt
+
+    layup_plies = list(state.layup_plies or [])
+    laminae = state.laminae or []
+
+    # Auto-generate name: geometry_name / angle_summary / total_thickness
+    geo_name = os.path.splitext(state.geo_file_name or "unknown")[0]
+    angle_parts = [str(int(p["angle"])) for p in layup_plies[:8]]
+    if len(layup_plies) > 8:
+        angle_parts.append("\u2026")
+    angle_str = "/".join(angle_parts) if angle_parts else "no-layup"
+
+    total_t = sum(
+        next((x["thickness_mm"] for x in laminae if x["name"] == p.get("lamina_name")), 0.0)
+        for p in layup_plies
+    )
+
+    # Include first lamina name for material context
+    first_lamina = layup_plies[0].get("lamina_name", "") if layup_plies else ""
+    name = f"{geo_name} — {first_lamina} [{angle_str}] {total_t:.2f}mm"
+
+    lamina_names_used = {p.get("lamina_name") for p in layup_plies if p.get("lamina_name")}
+    laminae_used = {
+        lam["name"]: dict(lam)
+        for lam in laminae if lam["name"] in lamina_names_used
+    }
+
+    entry = {
+        "id":        _dt.now().isoformat(),
+        "name":      name,
+        "timestamp": _dt.now().strftime("%Y-%m-%d %H:%M"),
+        "geometry": {
+            "file_name":      state.geo_file_name or "",
+            "span_length_m":  float(state.span_length or 0),
+            "elem_size_mm":   float(state.elem_size or 0),
+            "num_elem_thick": int(state.num_elem_thick or 0),
+        },
+        "layup": {
+            "plies":              layup_plies,
+            "ply_count":          len(layup_plies),
+            "total_thickness_mm": round(total_t, 4),
+            "angle_summary":      "/".join(angle_parts),
+        },
+        "laminae_used": laminae_used,
+        "xs_solver":       state.xs_solver or "",
+        "bc_type":         state.bc_type or "",
+        "k_matrix_mm":     state.result_k_mm,
+    }
+
+    library = list(state.stiffness_library or [])
+    library.append(entry)
+    state.stiffness_library = library
+    save_db(STIFFNESS_LIBRARY_DB, library)
+    _refresh_lib_table(library)
+
+    state.save_snackbar_text = f"Saved to library: {name}"
+    state.save_snackbar_open = True
+    state.flush()
+    log.info("Auto-saved K matrix '%s' to library (%d total)", name, len(library))
+
 @ctrl.add("run_material_sg")
 def on_run_material_sg():
     asyncio.ensure_future(run_material_sg_async(state))
@@ -312,6 +383,25 @@ def _refresh_lib_table(library):
 
 # Initialize library table from persisted data
 _refresh_lib_table(list(state.stiffness_library or []))
+
+
+@ctrl.add("open_save_k_dialog")
+def open_save_k_dialog():
+    """Open the save dialog with an auto-generated name."""
+    layup_plies = list(state.layup_plies or [])
+    laminae = state.laminae or []
+    geo_name = os.path.splitext(state.geo_file_name or "unknown")[0]
+    angle_parts = [str(int(p["angle"])) for p in layup_plies[:8]]
+    if len(layup_plies) > 8:
+        angle_parts.append("\u2026")
+    angle_str = "/".join(angle_parts) if angle_parts else "no-layup"
+    total_t = sum(
+        next((x["thickness_mm"] for x in laminae if x["name"] == p.get("lamina_name")), 0.0)
+        for p in layup_plies
+    )
+    first_lamina = layup_plies[0].get("lamina_name", "") if layup_plies else ""
+    state.save_k_name = f"{geo_name} — {first_lamina} [{angle_str}] {total_t:.2f}mm"
+    state.save_k_dialog_open = True
 
 
 @ctrl.add("save_k_to_library")
@@ -454,6 +544,16 @@ def load_k_from_library(idx):
         rows.append(row)
     state.k_matrix_rows = rows
 
+    # Clear stale downstream results and visualization — they don't belong to this K matrix
+    state.result_deflections = None
+    state.result_ccx_factor = None
+    state.ccx_history = []
+    state.beam_vtk_path = None
+    state.buckling_vtk_path = None
+    state.active_vtk = "none"
+    state.warp_factor_beam = 1.0
+    state.warp_factor_buckling = 1.0
+
     # Carry over Euler / mass if stored
     if entry.get("euler_P_cr_22_N") is not None:
         state.result_P_cr_22 = entry["euler_P_cr_22_N"]
@@ -463,6 +563,8 @@ def load_k_from_library(idx):
         state.result_beam_mass_kg = entry["beam_mass_kg"]
 
     name = entry.get("name", f"#{idx+1}")
+    angle_summary = entry.get("layup", {}).get("angle_summary", "")
+    state.result_k_source_label = f"Library: {name}" + (f" — {angle_summary}" if angle_summary else "")
     log.info("Loaded K matrix '%s' from library into active results", name)
     state.active_page = 3  # switch to Results page
 

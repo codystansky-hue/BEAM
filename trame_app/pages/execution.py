@@ -41,8 +41,19 @@ def build_execution_page(server):
                 v3.VBtn(
                     "1 \u00b7 Mesh",
                     click=ctrl.run_stage_1,
-                    color="secondary",
-                    variant="outlined",
+                    color=("has_mesh ? 'success' : 'secondary'",),
+                    variant=("has_mesh ? 'tonal' : 'outlined'",),
+                    prepend_icon=("has_mesh ? 'mdi-check-circle' : 'mdi-numeric-1-circle-outline'",),
+                    loading=("pipeline_running",),
+                    disabled=("pipeline_running || !geo_file_name || layup_plies.length === 0",),
+                    classes="mx-2",
+                )
+                v3.VBtn(
+                    "K Matrix",
+                    click=ctrl.run_stiffness,
+                    color=("result_k_mm ? 'success' : 'teal'",),
+                    variant=("result_k_mm ? 'tonal' : 'outlined'",),
+                    prepend_icon=("result_k_mm ? 'mdi-check-circle' : 'mdi-matrix'",),
                     loading=("pipeline_running",),
                     disabled=("pipeline_running || !geo_file_name || layup_plies.length === 0",),
                     classes="mx-2",
@@ -50,8 +61,9 @@ def build_execution_page(server):
                 v3.VBtn(
                     "2 \u00b7 Global",
                     click=ctrl.run_stage_2,
-                    color="secondary",
-                    variant="outlined",
+                    color=("result_deflections ? 'success' : 'secondary'",),
+                    variant=("result_deflections ? 'tonal' : 'outlined'",),
+                    prepend_icon=("result_deflections ? 'mdi-check-circle' : 'mdi-numeric-2-circle-outline'",),
                     loading=("pipeline_running",),
                     disabled=("pipeline_running || !has_mesh",),
                     classes="mx-2",
@@ -59,8 +71,9 @@ def build_execution_page(server):
                 v3.VBtn(
                     "3 \u00b7 Local",
                     click=ctrl.run_stage_3,
-                    color="secondary",
-                    variant="outlined",
+                    color=("result_ccx_factor !== null ? 'success' : 'secondary'",),
+                    variant=("result_ccx_factor !== null ? 'tonal' : 'outlined'",),
+                    prepend_icon=("result_ccx_factor !== null ? 'mdi-check-circle' : 'mdi-numeric-3-circle-outline'",),
                     loading=("pipeline_running",),
                     disabled=("pipeline_running || !has_mesh",),
                     classes="mx-2",
@@ -84,10 +97,10 @@ def build_execution_page(server):
 
             html.Div("Solver Log", classes="text-caption text-medium-emphasis mb-1")
             with html.Div(
-                id="pipeline-log-box",
                 style=(
                     "background: #1e1e1e; color: #d4d4d4; border-radius: 4px; "
-                    "padding: 8px; height: 144px; overflow-y: auto; font-family: monospace;"
+                    "padding: 8px; height: 144px; overflow-y: auto; font-family: monospace; "
+                    "display: flex; flex-direction: column-reverse;"
                 ),
             ):
                 html.Pre(
@@ -98,5 +111,4 @@ def build_execution_page(server):
     # ---- Batch Analysis ----
     with v3.VCard(classes="mb-2", variant="outlined"):
         v3.VCardTitle("Batch Analysis")
-
-    build_batch_analysis_page(server)
+        build_batch_analysis_page(server)

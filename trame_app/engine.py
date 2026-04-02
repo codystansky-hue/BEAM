@@ -593,63 +593,15 @@ def _run_stage_3(snap, log_cb=None):
 # Convergence monitor helpers
 # ---------------------------------------------------------------------------
 
-def _render_convergence_plot(history) -> str:
-    """Render a dark-themed convergence plot and return a base64 PNG data URI."""
-    idxs = list(range(len(history)))
-    iters = [h["iter"] for h in history]
-    dts   = [h["dt"]   for h in history]
-
-    bar_colors = [
-        "#4caf50" if it <= 4 else "#ff9800" if it <= 8 else "#f44336"
-        for it in iters
-    ]
-
-    bg   = "#1e1e1e"
-    axes_bg = "#2a2a2a"
-    text_c  = "#cccccc"
-    grid_c  = "#444444"
-
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7, 3.5))
-    fig.patch.set_facecolor(bg)
-
-    # -- Top: iterations per increment --
-    ax1.set_facecolor(axes_bg)
-    ax1.bar(idxs, iters, color=bar_colors, width=0.7)
-    ax1.set_ylabel("Iterations", color=text_c, fontsize=8)
-    ax1.tick_params(colors=text_c, labelsize=7)
-    ax1.set_xticks([])
-    ax1.grid(axis="y", color=grid_c, linewidth=0.5)
-    ax1.spines[:].set_color(grid_c)
-    ax1.set_title("CalculiX Convergence", color=text_c, fontsize=9, pad=4)
-
-    # -- Bottom: time-step size --
-    ax2.set_facecolor(axes_bg)
-    ax2.plot(idxs, dts, color="#42a5f5", linewidth=1.2, marker="o", markersize=3)
-    ax2.set_ylabel("dt", color=text_c, fontsize=8)
-    ax2.set_xlabel("Increment index", color=text_c, fontsize=8)
-    ax2.tick_params(colors=text_c, labelsize=7)
-    ax2.grid(color=grid_c, linewidth=0.5)
-    ax2.spines[:].set_color(grid_c)
-
-    plt.tight_layout(pad=0.8)
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=110, facecolor=bg)
-    plt.close(fig)
-    buf.seek(0)
-    b64 = base64.b64encode(buf.read()).decode()
-    return f"data:image/png;base64,{b64}"
-
 
 async def _poll_ccx_convergence(state, runs_dir):
-    """Poll snippet.sta every 0.5 s and push convergence chart to trame state."""
+    """Poll snippet.sta every 0.5 s and push increment history to trame state."""
     ccx_poll = CalculiXSolver(working_dir=runs_dir)
     while True:
         await asyncio.sleep(0.5)
         history = ccx_poll.parse_sta_file()
         if history:
             state.ccx_history = history
-            state.ccx_convergence_img = _render_convergence_plot(history)
             state.flush()
 
 
@@ -712,6 +664,7 @@ async def run_all_stages(state):
         # Invalidate downstream
         state.result_k_mm = None
         state.result_k_SI = None
+        state.result_k_source_label = ""
         state.result_deflections = None
         state.result_ccx_factor = None
     state.flush()
@@ -724,6 +677,10 @@ async def run_all_stages(state):
         _apply_results(state, res2)
         if ok2:
             state.pipeline_stage = "Stage 2 Complete"
+            plies = list(snap.get("layup_plies") or [])
+            angles = "/".join(str(int(p.get("angle", 0))) for p in plies)
+            solver = snap.get("xs_solver", "CLT")
+            state.result_k_source_label = f"Solved ({solver}): {angles}"
         state.flush()
     else:
         ok2 = False
@@ -733,7 +690,7 @@ async def run_all_stages(state):
     # --- Stage 3 ---
     if ok1 and ok2:
         state.pipeline_stage = "Stage 3: Local Buckling"
-        state.ccx_convergence_img = ""
+        state.ccx_history = []
         state.flush()
         runs_dir = os.path.join(os.getcwd(), "runs")
         poll_task = asyncio.create_task(_poll_ccx_convergence(state, runs_dir))
@@ -746,8 +703,6 @@ async def run_all_stages(state):
             except asyncio.CancelledError:
                 pass
         _apply_results(state, res3)
-        if state.ccx_history:
-            state.ccx_convergence_img = _render_convergence_plot(state.ccx_history)
         if ok3:
             state.pipeline_stage = "Stage 3 Complete"
         state.flush()
@@ -779,6 +734,8 @@ async def run_stage_1_async(state):
     log_cb = _make_log_streamer(state, loop)
     ok, results, _logs = await asyncio.to_thread(_run_stage_1, snap, log_cb)
     _apply_results(state, results)
+    if ok:
+        state.result_k_source_label = ""
     state.pipeline_stage = "Stage 1 Complete" if ok else "Stage 1 Failed"
     state.pipeline_running = False
     state.flush()
@@ -794,6 +751,11 @@ async def run_stage_2_async(state):
     log_cb = _make_log_streamer(state, loop)
     ok, results, _logs = await asyncio.to_thread(_run_stage_2, snap, log_cb)
     _apply_results(state, results)
+    if ok:
+        plies = list(snap.get("layup_plies") or [])
+        angles = "/".join(str(int(p.get("angle", 0))) for p in plies)
+        solver = snap.get("xs_solver", "CLT")
+        state.result_k_source_label = f"Solved ({solver}): {angles}"
     state.pipeline_stage = "Stage 2 Complete" if ok else "Stage 2 Failed"
     state.pipeline_running = False
     state.flush()
@@ -803,7 +765,7 @@ async def run_stage_3_async(state):
     state.pipeline_log = []
     state.pipeline_log_string = ""
     state.pipeline_stage = "Stage 3: Local Buckling"
-    state.ccx_convergence_img = ""
+    state.ccx_history = []
     state.flush()
 
     snap = _snapshot_state(state)
@@ -823,11 +785,113 @@ async def run_stage_3_async(state):
 
     _apply_results(state, results)
 
-    # Render final chart from completed history
-    if state.ccx_history:
-        state.ccx_convergence_img = _render_convergence_plot(state.ccx_history)
-
     state.pipeline_stage = "Stage 3 Complete" if ok else "Stage 3 Failed"
+    state.pipeline_running = False
+    state.flush()
+
+
+# ---------------------------------------------------------------------------
+# Stiffness-only runner: Mesh + XS solver → K matrix, auto-save to library
+# ---------------------------------------------------------------------------
+
+def _run_stiffness_only(snap, log_cb=None):
+    """Mesh + cross-section solver only. Returns (ok, results_dict, log_lines)."""
+    logs = []
+    def _log(msg):
+        ts = datetime.now().strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}"
+        logs.append(line)
+        log.info(msg)
+        if log_cb:
+            log_cb(line)
+
+    results = {}
+    t0 = time.perf_counter()
+    _log("=== Stiffness Calculation ===")
+
+    # --- Mesh (reuse cache or run) ---
+    mesh_data = _INTERNAL_CACHE["mesh"]
+    element_props = _INTERNAL_CACHE["props"]
+    if not mesh_data:
+        _log("  Meshing...")
+        ok1, res1, _ = _run_stage_1(snap, log_cb)
+        if not ok1:
+            _log("  FAIL: Meshing failed")
+            return False, results, logs
+        mesh_data = _INTERNAL_CACHE["mesh"]
+        element_props = _INTERNAL_CACHE["props"]
+        results.update(res1)
+
+    if not mesh_data:
+        _log("  FAIL: No mesh data available")
+        return False, results, logs
+
+    runs_dir = os.path.join(os.getcwd(), "runs")
+
+    try:
+        solver_choice = snap.get("xs_solver", "CLT (Built-in)")
+        _log(f"  Cross-section solver: {solver_choice}")
+
+        if solver_choice == "CLT (Built-in)":
+            _log("  Computing ABD + Bredt closed-section stiffness...")
+            t_sc = time.perf_counter()
+            clt = CLTBeamSolver(working_dir=runs_dir)
+            k_mm = clt.compute_stiffness(mesh_data, element_props)
+            _log(f"  CLT solver finished ({time.perf_counter()-t_sc:.2f}s)")
+        else:
+            sc_exe = os.path.abspath(snap["swiftcomp_path"])
+            _log(f"  SwiftComp exe: {sc_exe}")
+            sc = SwiftCompSolver(executable_path=snap["swiftcomp_path"], working_dir=runs_dir)
+
+            _log("  Writing SwiftComp input deck...")
+            sc.write_input_file(mesh_data, element_props)
+            _log("  Running SwiftComp...")
+            t_sc = time.perf_counter()
+            sc.execute()
+            _log(f"  SwiftComp finished ({time.perf_counter()-t_sc:.2f}s)")
+            _log("  Parsing stiffness matrix...")
+            k_mm = sc.parse_results()
+
+        results["result_k_mm"] = k_mm.tolist()
+        _log(f"  K(1,1) = {k_mm[0,0]:.4e}")
+
+        # Convert to SI
+        k_SI = k_mm.copy()
+        bending_idx = [3, 4, 5]
+        for r in range(6):
+            for c in range(6):
+                if r in bending_idx and c in bending_idx: k_SI[r, c] /= 1e6
+                elif r in bending_idx or c in bending_idx: k_SI[r, c] /= 1e3
+        results["result_k_SI"] = k_SI.tolist()
+
+        elapsed = time.perf_counter() - t0
+        _log(f"  Stiffness calculation complete ({elapsed:.2f}s)")
+        return True, results, logs
+    except Exception as e:
+        _log(f"  FAIL: {e}")
+        import traceback
+        _log(f"  Traceback: {traceback.format_exc()}")
+        return False, results, logs
+
+
+async def run_stiffness_async(state):
+    """Async wrapper: run mesh + XS solver only, then auto-save to library."""
+    state.pipeline_running = True
+    state.pipeline_log = []
+    state.pipeline_log_string = ""
+    state.pipeline_stage = "Stiffness Calculation"
+    state.flush()
+    snap = _snapshot_state(state)
+    loop = asyncio.get_event_loop()
+    log_cb = _make_log_streamer(state, loop)
+    ok, results, _logs = await asyncio.to_thread(_run_stiffness_only, snap, log_cb)
+    _apply_results(state, results)
+    if ok:
+        plies = list(snap.get("layup_plies") or [])
+        angles = "/".join(str(int(p.get("angle", 0))) for p in plies)
+        solver = snap.get("xs_solver", "CLT")
+        state.result_k_source_label = f"Solved ({solver}): {angles}"
+    state.pipeline_stage = "Stiffness Complete" if ok else "Stiffness Failed"
     state.pipeline_running = False
     state.flush()
 
